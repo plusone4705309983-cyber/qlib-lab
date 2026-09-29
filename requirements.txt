@@ -1,0 +1,47 @@
+# Qlib 基础环境 (Windows 原生 / Python 3.10 / CPU)
+#
+# 安装 (国内网络, 清华镜像):
+#   python -m venv .venv
+#   .venv\Scripts\python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+#
+# 注意: 直接 `pip install pyqlib` 会在 mlflow<3.13 的依赖回溯上卡死十几分钟。
+#       若遇到卡住，分批装：先装无约束核心包，再单独装 mlflow，最后 --no-deps 装 pyqlib。
+
+# --- 核心 ---
+pyqlib==0.9.7
+numpy==2.2.6
+pandas==2.3.3
+pyyaml==6.0.3
+requests==2.34.2
+
+# --- pyqlib 运行时依赖 ---
+mlflow==3.12.0
+mlflow-skinny==3.12.0
+filelock==3.29.7
+redis==8.1.0
+dill==0.4.1
+fire==0.7.1
+ruamel.yaml==0.19.1
+python-redis-lock
+tqdm==4.70.1
+pymongo==4.18.2
+loguru==0.7.3
+joblib==1.6.0
+matplotlib==3.10.9
+pyarrow==23.0.1
+pydantic-settings
+setuptools-scm
+
+# --- 模型 / 优化 (暂时不用，但 pyqlib 声明依赖，装上避免后续报错) ---
+lightgbm==4.7.0
+cvxpy==1.7.5
+scipy==1.15.3
+
+# --- Notebook (跑 explore 脚本时可用) ---
+ipykernel==7.3.0
+notebook==7.6.3
+jupyterlab==4.6.4
+nbconvert==7.17.1
+
+# --- RL (仅 qlib.contrib 用到) ---
+gym==0.26.2

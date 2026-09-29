@@ -1,0 +1,18 @@
+# ============================================================
+#  防止 Windows 的 CRLF 转换污染数据文件
+#  core.autocrlf 若为 true, CSV 会被转成 CRLF 再入库,
+#  导致「提交后 git status 永远显示已修改」。
+# ============================================================
+
+# 数据资产: 按字节原样存储, 不做任何行尾转换
+*.csv    -text
+*.bin    binary
+*.db     binary
+*.json   -text
+
+# 脚本: 仓库内统一 LF, 跨平台协作不会打架
+*.py     text eol=lf
+*.md     text eol=lf
+*.txt    text eol=lf
+*.yaml   text eol=lf
+*.yml    text eol=lf

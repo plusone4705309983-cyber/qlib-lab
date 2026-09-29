@@ -1,0 +1,77 @@
+# ============================================================
+#  qlib-lab  .gitignore
+#  原则: 只提交「人可读、且是唯一事实来源」的东西。
+#        可重建的中间产物一律不进仓库。
+# ============================================================
+
+# ---- Python 虚拟环境 (0.81 GB, 绝对不要提交) ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Python 缓存 / 编译产物 ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# 注意: data/_raw_cache/ (6.7 MB 原始 API 响应) 是**故意提交**的。
+# 它是本项目唯一不可再生的数据层 —— 丢了就只能重调 API, 而腾讯/东财随时可能
+# 追溯修订历史数据(分红送转会调整), 届时拿到的是另一份数据。
+# 这些 JSON 写一次即固定, 不会像日志那样膨胀。留着它才能在 east.py 的
+# 复权逻辑出问题时离线重算 CSV, 而不必赌「API 今天返回的和上次一样」。
+
+# ---- Qlib 派生产物 (1.06 MB 二进制) ----
+# .bin 全部由 CSV + scripts/dump_bin.py 确定性重建, 几秒就能生成,
+# 而且二进制文件进 git 后 diff 完全不可读。重建命令见 notes/concepts.md。
+data/selfmade/cn_bin/
+data/selfmade/us_bin/
+# 若确实想让 clone 下来即可直接查询, 删掉上面两行即可 (仅多 1 MB)
+
+# ---- 打包 / 构建产物 ----
+build/
+dist/
+*.egg-info/
+.eggs/
+*.whl
+
+# ---- 编辑器 / IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- 系统垃圾文件 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+$RECYCLE.BIN/
+ehthumbs.db
+Desktop.ini
+
+# ---- 日志与临时文件 ----
+*.log
+*.tmp
+nohup.out
+
+# ---- 密钥与凭证 (保险起见, 永远不要提交) ----
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+credentials.json
+secrets.yaml
+id_rsa*
+
+# ---- opencode 本地文件 ----
+# 会话 ID, 指向本机会话存储, 对外无意义
+opencode_link.txt
+.opencode/
