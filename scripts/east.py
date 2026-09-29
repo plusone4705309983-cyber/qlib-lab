@@ -225,10 +225,13 @@ def build_csv(secid: str, beg: str, end: str, vol_mult: float, min_gap: float = 
 
     out = []
     for day in sorted(raw.keys() & adj.keys()):
-        _, o, c, h, l, v = raw[day]
-        _, _, adj_c, _, _, _ = adj[day]
+        _, adj_o, adj_c, adj_h, adj_l, _ = adj[day]
+        c = raw[day][2]
         factor = 1.0 if c == 0 else adj_c / c
-        out.append([day, o, h, l, adj_c, v * vol_mult, factor])
+        # fqt=2 是后复权, OHLC 全部取该口径, 与 $close 保持一致 (Qlib 字段契约)。
+        # 成交量取 raw (复权不影响成交量), 手 -> 股。
+        out.append([day, adj_o, adj_h, adj_l, adj_c,
+                    raw[day][5] * vol_mult, factor])
     return out
 
 
@@ -298,10 +301,13 @@ def build_csv_tencent(item: dict, beg: str, end: str, vol_mult: float) -> list[l
     adj = {r[0]: r for r in _rows(_tencent_cached(code, "hfq", beg, end))}
     out = []
     for day in sorted(raw.keys() & adj.keys()):
-        _, o, c, h, l, v = raw[day]
-        _, _, adj_c, _, _, _ = adj[day]
+        _, adj_o, adj_c, adj_h, adj_l, _ = adj[day]
+        c = raw[day][2]
         factor = 1.0 if c == 0 else adj_c / c
-        out.append([day, o, h, l, adj_c, v * vol_mult, factor])
+        # OHLC 全部取后复权口径, 与 $close 保持一致 (Qlib 字段契约)。
+        # 成交量用 raw 的手数换算, 复权不影响成交量。
+        out.append([day, adj_o, adj_h, adj_l, adj_c,
+                    raw[day][5] * vol_mult, factor])
     return out
 
 

@@ -32,20 +32,43 @@ data/selfmade/cn_bin/
 
 ## 2. 复权：最容易踩的坑
 
-qlib 的约定（官方文档原话是 "The price volume data look different from the actual
-dealing price because of they are adjusted"）：
+qlib 的字段契约（官方文档 `component/data.rst` 对每个字段的定义）：
 
-| 表达式 | 含义 |
-|---|---|
-| `$close` | **后复权价**，跨越分红送转可比 |
-| `$factor` | 后复权价 / 原始价 |
-| `$close / $factor` | **真实成交价**，和券商 App 一致 |
+| 字段 | 官方定义 | 含义 |
+|---|---|---|
+| `$open` | The adjusted opening price | **后复权价** |
+| `$high` | The adjusted highest price | **后复权价** |
+| `$low` | The adjusted lowest price | **后复权价** |
+| `$close` | The adjusted closing price | **后复权价** |
+| `$factor` | factor = adjusted_price / original_price | 后复权价 / 原始价 |
+| 任意价格 / `$factor` | — | **真实成交价**，和券商 App 一致 |
+
+关键点：**OHLC 四个字段必须全部是复权价**，不只是 `close`。
 
 **必须用后复权（hfq），不能用前复权（qfq）。** 实测东财和腾讯的 `qfq` 对长历史标的都会
 算出**负价格**：茅台 2001～2016 共 3529 行 close ≤ 0（`sh600519` 6013 行里有 3529 行）。
 两家是同一套「累减累计分红」的算法，分红史一长就溢出成负数。后复权是乘法累乘，不会变负。
 
 后验校验：`SH600519` 2024-01-02 的 `$close/$factor` = **1685.01**，与真实收盘价一致。
+
+### 口径混用是静默错误
+
+本项目踩过这个坑：只复权了 `close`，`open`/`high`/`low` 取了 raw。
+后果是 `($high-$low)/$close` 这类表达式**分子分母不同口径**——不报错、不崩溃，
+只是结果偏小 5～6 倍：
+
+```
+振幅   ($high-$low)/$close     0.381%   错
+正确                             2.143%          偏小 5.6 倍
+成交额 $close*$volume        338.6 亿   错
+正确 ($close/$factor)*vol      54.2 亿   对
+```
+
+注意成交额这条**即使 OHLC 全对齐了也还是错的**——复权价是历史价格重标定后的结果，
+与当下的钱无关。凡是成交额 / 市值 / 均价，必须先 `$field/$factor` 还原真实价。
+
+自动检测方法：**`$close` 必须落在 `[$low, $high]` 区间内**。
+这个不变式在两种口径混用时必然破坏（实测检出 1999/2000 行），已加进 `explore/00_verify.py`。
 
 **美股 factor 恒为 1.0**——腾讯的美股接口只给不复权（`day`），没有 `qfqday`/`hfqday`，
 东财美股同样要试三种复权参数但结果完全一致。做美股策略时要注意这一点。
@@ -158,7 +181,7 @@ allmkt = pd.concat([df_cn, df_us], axis=0)
 
 - A 股东财/腾讯的 volume 是**手**，入库时 ×100 换算成**股**（`--vol-mult 100`）
 - 美股本来就是**股**（`--vol-mult 1`）
-- 校验：茅台 2024-01-02 成交额 ≈ 338.6 亿元，量级合理
+- 校验：茅台 2024-01-02 成交额 = **54.2 亿元**（`$close/$factor × $volume`，真实口径）
 
 ---
 

@@ -35,5 +35,19 @@ p["$ret"] = p["$raw"] / p["$raw"].shift(1) - 1
 print(p.tail(6).to_string())
 
 print("\n注意: $volume 已把 A股的「手」换算成「股」(x100)，可直接和总市值口径比较")
-mv = D.features([SYM_CN[0]], ["$close", "$volume"], start_time="2024-01-02", end_time="2024-01-02")
-print(f"  单日成交额 ≈ {mv['$close'].iloc[0] * mv['$volume'].iloc[0] / 1e8:.1f} 亿元")
+print("成交额必须用「真实成交价」算, 不能用复权价 —— 复权价是历史价格重标定后的结果,")
+print("与当下的钱无关, 直接乘会算出 6 倍以上的虚高值。")
+mv = D.features([SYM_CN[0]], ["$close", "$factor", "$volume"],
+                start_time="2024-01-02", end_time="2024-01-02")
+r = mv.iloc[0]
+adj = r["$close"] * r["$volume"] / 1e8
+raw = r["$close"] / r["$factor"] * r["$volume"] / 1e8
+print(f"  真实收盘价 = {r['$close'] / r['$factor']:.2f}   复权价 = {r['$close']:.2f}")
+print(f"  成交额 $close*$volume       = {adj:.1f} 亿元   <- 错, 用了复权价")
+print(f"  成交额 ($close/$factor)*vol = {raw:.1f} 亿元   <- 对")
+print()
+print("同理, 振幅等所有涉及「绝对价格」的指标都不能混用两种口径:")
+amp = D.features([SYM_CN[0]], ["$high", "$low", "$close"],
+                 start_time="2024-01-02", end_time="2024-01-02").iloc[0]
+print(f"  ($high-$low)/$close = {(amp['$high'] - amp['$low']) / amp['$close'] * 100:.3f}%")
+
