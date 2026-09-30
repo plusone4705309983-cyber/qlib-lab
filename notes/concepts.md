@@ -2,6 +2,9 @@
 
 环境：`C:\Work_Data\Source_Code_New\qlib-lab`，Windows 原生 + Python 3.10.11 + `pyqlib==0.9.7`，纯 CPU，8GB 内存够用。
 
+> 本文讲**本项目怎么用 Qlib**。Qlib 库本身的架构（Provider 抽象、表达式引擎、五大模块、
+> 可扩展点、本环境模型层可用性）见 **[architecture.md](architecture.md)**。
+
 **目录可任意搬移**：所有路径都从 `Path(__file__).resolve().parent.parent` 派生，
 数据源、股票池、provider 路径集中在 `config/symbols.yaml` + `explore/_common.py`，
 代码里没有一处硬编码绝对路径。venv 本身不可搬移（`pyvenv.cfg` 和 launcher 写死了路径），搬目录要重建。

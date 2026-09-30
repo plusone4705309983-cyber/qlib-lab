@@ -183,4 +183,5 @@ python scripts\dump_bin.py dump_all --data_path data\selfmade\cn --qlib_dir data
 | `explore/_common.py` | 路径与股票池的单一来源 |
 | `explore/00~05_*.py` | 六个概念脚本 |
 | `notes/concepts.md` | 踩坑记录与概念详解 |
+| `notes/architecture.md` | Qlib 库架构、模块划分与可扩展点 |
 | `data/_raw_cache/` | API 原始响应，可复现性的最后保险 |
