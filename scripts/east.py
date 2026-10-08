@@ -219,6 +219,38 @@ def _rows(data: dict) -> list[tuple[str, float, float, float, float, float]]:
     return parsed
 
 
+MAX_FACTOR_DROP = 0.01
+
+
+def _drop_factor_drops(rows: list[list], name: str = "") -> list[list]:
+    """剔除 factor 异常下调的交易日 (后复权 factor 只在除息日上调, 永不下降)。
+
+    实测下调行均为数据错误:
+      - 腾讯 hfq 源对"最新交易日"返回未完成复权的行
+        (sz300750 末行 factor 恰为 1.0 = 完全未复权; 四只 A 股末行 -9%~-48%);
+      - 历史个别交易日同样出错 (如 sh601318 2023-04-27 涨停日被记成 +7.61%)。
+    阈值 1% 来自实测: 正常日 factor 变动中位数 0.0000%、99 分位 0.60%,
+    实测剔除量 sh600519=5 / sh601318=28 / sz000001=17 / sz300750=0 天。
+    """
+    kept: list[list] = []
+    dropped: list[tuple] = []
+    prev = None
+    for r in rows:
+        f = r[6]
+        if prev is not None and f < prev * (1.0 - MAX_FACTOR_DROP):
+            dropped.append((r[0], prev, f))
+        else:
+            kept.append(r)
+        # 无论剔除与否都前进: 否则一个下调日会让其后所有偏低行被连锁剔除
+        # (实测连锁会误删 69/421/678 天)。
+        prev = f
+    if dropped:
+        head = ", ".join(f"{d} {p:.4f}->{f:.4f}" for d, p, f in dropped[:3])
+        tail = "" if len(dropped) <= 3 else f" 等共 {len(dropped)} 天"
+        print(f"WARN {name:<10} 剔除 factor 下调 {len(dropped)} 天: {head}{tail}")
+    return kept
+
+
 def build_csv(secid: str, beg: str, end: str, vol_mult: float, min_gap: float = 2.5) -> list[list]:
     raw = {r[0]: r for r in _rows(fetch_cached(secid, 0, beg, end, min_gap))}
     adj = {r[0]: r for r in _rows(fetch_cached(secid, 2, beg, end, min_gap))}
@@ -232,7 +264,7 @@ def build_csv(secid: str, beg: str, end: str, vol_mult: float, min_gap: float = 
         # 成交量取 raw (复权不影响成交量), 手 -> 股。
         out.append([day, adj_o, adj_h, adj_l, adj_c,
                     raw[day][5] * vol_mult, factor])
-    return out
+    return _drop_factor_drops(out, secid)
 
 
 def load_config(root: Path) -> dict:
@@ -308,7 +340,7 @@ def build_csv_tencent(item: dict, beg: str, end: str, vol_mult: float) -> list[l
         # 成交量用 raw 的手数换算, 复权不影响成交量。
         out.append([day, adj_o, adj_h, adj_l, adj_c,
                     raw[day][5] * vol_mult, factor])
-    return out
+    return _drop_factor_drops(out, code)
 
 
 def main() -> None:
@@ -323,6 +355,9 @@ def main() -> None:
     ap.add_argument("--throttle", type=float, default=4.0, help="每只股票之间的间隔秒数")
     ap.add_argument("--min-gap", type=float, default=2.5, help="同一 IP 两次请求的最小间隔秒数")
     ap.add_argument("--source", default="eastmoney", choices=["eastmoney", "tencent"])
+    ap.add_argument("--symbol", action="append", default=None, metavar="QLIB_NAME",
+                    help="只重建指定股票, 可重复: --symbol sh600519 --symbol sz000001; "
+                         "缺省 = 重建整个 --market (会全量重跑该市场所有股票)")
     args = ap.parse_args()
 
     install_resolver()
@@ -331,7 +366,20 @@ def main() -> None:
     out_dir = root / market["csv_dir"]
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for item in market["symbols"]:
+    symbols = market["symbols"]
+    if args.symbol:
+        wanted = {s.strip().lower() for s in args.symbol}
+        symbols = [it for it in symbols if it["qlib"].strip().lower() in wanted]
+        missing = wanted - {it["qlib"].strip().lower() for it in symbols}
+        if missing:
+            raise SystemExit(
+                f"--symbol 不在 config markets['{args.market}'].symbols 中: "
+                f"{sorted(missing)}\n"
+                f"  先在 config/symbols.yaml 的 {args.market}.symbols 下加一行, 再重跑"
+            )
+        print(f"--symbol 命中 {len(symbols)}/{len(market['symbols'])} 只")
+
+    for idx, item in enumerate(symbols):
         try:
             if args.source == "tencent":
                 rows = build_csv_tencent(item, args.beg, args.end, vol_mult)
@@ -345,7 +393,8 @@ def main() -> None:
             print(f"OK   {item['name']:<8} {item['secid']:<12} {len(rows):>5} 行  {rows[0][0]}~{rows[-1][0]}  -> {path.name}")
         except Exception as exc:
             print(f"FAIL {item['name']:<8} {item['secid']:<12} {exc}")
-        time.sleep(args.throttle)
+        if idx < len(symbols) - 1:      # 最后一只不再白等 throttle 秒
+            time.sleep(args.throttle)
 
 
 if __name__ == "__main__":

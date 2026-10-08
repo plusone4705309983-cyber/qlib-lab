@@ -31,6 +31,7 @@ def inspect_market(label, region, provider, symbols):
     inst = D.list_instruments(D.instruments("all"), as_list=True)
 
     # ---- 1) 股票池 + 有效期 (最常用: 确认新股票是否进来了) ----
+    cal_end = str(cal[-1].date())
     print(f"\n[1] 股票池 {len(inst)} 只   日历 {len(cal)} 天  "
           f"{cal[0].date()} .. {cal[-1].date()}")
     print("                    生效区间                     状态")
@@ -38,6 +39,10 @@ def inspect_market(label, region, provider, symbols):
     for name in inst:
         start, end = _range(name, provider)
         status = "OK" if name in pool else "!! provider 有, 但配置里没有"
+        # dump_fix 用 df.reindex(现有日历) 对齐, 超出日历的日期被静默丢弃,
+        # 而 all.txt 的区间直接取自 CSV -> 两者会不一致, 这里查出来
+        if end != "?" and end > cal_end:
+            status = f"!! all.txt end={end} 超过日历末 {cal_end} (超出部分无数据)"
         print(f"    {name:11} {start} .. {end}   {status}")
     missing = pool - set(inst)
     if missing:
@@ -81,37 +86,49 @@ def inspect_market(label, region, provider, symbols):
           .to_string(float_format=lambda v: f"{v:,.2f}"))
     print("     ^ real price            ^ 成交额(亿)")
 
-    # ---- 6) 数据质量: 复权价与真实价方向背离检测 ----
+    # ---- 6) 数据质量: 后复权因子异常下调 ----
     print(f"\n[5] 数据质量检查 (全股票池, 近 3 个月)")
     bad = _hfq_gap_check(symbols)
     if bad:
-        print("    !! 发现复权价与真实价跳空方向相反 —— 后复权不再成立")
-        for sym, day, a, b, gh, gr in bad:
-            print(f"       {sym} {day}  hfq {a:,.2f} -> {b:,.2f} ({gh:+.2f}%)"
+        print("    !! 后复权因子 factor 出现下调 —— 除息只会导致上调, 下调无对应事件")
+        for sym, day, a, b, df_, gh, gr in bad:
+            print(f"       {sym} {day}  factor {df_:+.2f}%"
+                  f"   hfq {a:,.2f} -> {b:,.2f} ({gh:+.2f}%)"
                   f"   但真实价 {gr:+.2f}%")
-        print("       这类日期: $close 本身不可用于收益计算 (factor 被动漂移)")
-        print("       仍可用 $close/$factor 还原真实价, 即使价格序列可比性受损")
+        print("       该日 $close 不可用于收益计算; 可用 $close/$factor 还原真实价")
     else:
-        print("    OK  复权价与真实价同向, 后复权关系成立")
+        print("    OK  因子无下调, 后复权关系成立")
     print()
 
 
-def _hfq_gap_check(symbols, days=64, thresh=3.0):
-    """检测后复权价与真实价跳空方向相反的日期 —— 这才是数据源异常的信号。
+def _hfq_gap_check(symbols, days=64, thresh=1.0):
+    """检测后复权因子 factor 的异常**下调**。
 
-    判据说明 (容易写错, 故留档):
+    判据推导 (前两版都错, 留档避免重蹈):
 
-        hfq_t = raw_t * factor_t   (定义)
-        => hfq跳空 = raw跳空 + factor跳空   是恒等式, 单看它无法发现问题。
+        v1  "|Δhfq|>4% 就告警"       -> 3 条里 2 条是正常行情, 误报
+        v2  "hfq 与 raw 方向背离"     -> 全历史 2 条里 1 条是除息日, 误报
 
-    所以真正的异常特征是 **方向背离**:
+    事实是三件事:
 
-    - 同向 (hfq 与 raw 一起跌):  正常行情, factor 没参与。
-      实测 sz300750 2026-09-15 hfq -5.78% / raw -6.16% 同向 = 正常跌, 不该报。
-    - 反向 (hfq 跌但 raw 涨):    说明 factor 大幅偏离, 后复权不成立。
-      实测 sh600519 2026-09-28 hfq -9.26% / raw +0.56% 反向 = 数据源异常, 该报。
+    1) hfq = raw * factor 是定义, 故
+       Δhfq = Δraw + Δfactor 恒成立 —— 单看任何一侧的跳空都查不出问题。
 
-    美股 factor 恒为 1.0, 复权价即真实价, 单日 4% 跳动是正常现象, 直接跳过。
+    2) 除息日 hfq 与 raw **必然方向背离**, 这是正常的:
+       raw 因分红下跌, factor 相应上调, hfq 保持连续。
+       实测 sh600519 25 次 factor 单日上调 >1%, 其中 60% hfq/raw 反向,
+       如 2004-07-01 factor +31.03% / hfq +3.47% / raw -21.03% —— 正常除息。
+       所以 v2 的"反向=异常"不成立。
+
+    3) 后复权因子**只在除息日上调, 永远不该下调**。
+       (上调时 raw 同步下跌, 两者抵消; 下调没有对应的经济事件。)
+       实测 6011 天中 factor 单日下调 >1% 仅 5 天, 其中
+       2026-09-28 -9.76%: hfq -9.26% 而 raw +0.56%,
+       且 raw 被成交量佐证 (28218手 / 34.89亿 -> 均价 1236.3, 落在 1228~1244),
+       故错的是 hfq 那一行。
+
+    阈值 1%: factor 日噪声中位数 0.047%、99 分位 0.60%, 取 1% 可避开噪声。
+    美股 factor 恒为 1.0, 无下调可查, 直接跳过。
     """
     import pandas as pd
     from qlib.data import D
@@ -119,7 +136,7 @@ def _hfq_gap_check(symbols, days=64, thresh=3.0):
     probe = D.features(symbols, ["$factor"], start_time="2024-01-01",
                        end_time="2024-12-31")
     if (probe["$factor"] == 1.0).all():
-        print("    (factor 恒为 1.0 -> 未复权, 无复权连续性可查, 跳过)")
+        print("    (factor 恒为 1.0 -> 未复权, 无复权因子可查, 跳过)")
         return []
 
     cal = pd.DatetimeIndex(D.calendar())
@@ -133,17 +150,16 @@ def _hfq_gap_check(symbols, days=64, thresh=3.0):
         s = df.xs(sym, level=0)
         if len(s) < 2:
             continue
+        d_fac = s["$factor"].pct_change()
         raw = s["$close"] / s["$factor"]
         g_h = s["$close"].pct_change()
         g_r = raw.pct_change()
-        for pos, (ts, v) in enumerate(g_h.items()):
-            if pd.isna(v) or abs(v) < thresh / 100:
-                continue          # pos=0 恒为 NaN, 在此滤掉, 后面不会碰 iloc[-1]
-            r = g_r.iloc[pos]
-            if pd.isna(r) or v * r > 0:   # 同向 -> 正常行情
+        for pos, v in enumerate(d_fac):
+            if pd.isna(v) or v >= -thresh / 100:   # 只看下调; 上调 = 除息日, 正常
                 continue
-            out.append((sym, str(ts.date()), s["$close"].iloc[pos - 1],
-                        s["$close"].iloc[pos], v * 100, r * 100))
+            out.append((sym, str(s.index[pos].date()),
+                        s["$close"].iloc[pos - 1], s["$close"].iloc[pos],
+                        v * 100, g_h.iloc[pos] * 100, g_r.iloc[pos] * 100))
     return out
 
 
