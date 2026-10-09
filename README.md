@@ -127,6 +127,49 @@ D.features(syms, ["Rank($close/Ref($close,1)-1)"])    # ✗ TypeError
 
 ---
 
+## 数据检视网站
+
+`web/` 是一个以只读浏览为主的 Web 应用：把 CSV 数据画成 K 线，并自动标注异常——
+比逐行对数字更容易发现问题。另有一个受控的「添加股票」入口（见下）。
+
+```powershell
+.venv\Scripts\python.exe web\app.py       # 或双击 web\run.bat
+# 浏览器打开 http://127.0.0.1:8000
+```
+
+三个视图：**真实价 K 线**（`$price / $factor`，与券商 App 一致，可直接和东财/腾讯网页对照）、
+**后复权 K 线**、**因子阶梯图**（后复权因子应单调不减，向下跳变即标红）。左侧切换股票，
+工具栏可切「真实价 / 后复权」、对数轴、显示/隐藏异常，并可点「校验 .bin」抽查
+provider 与 CSV 是否一致。
+
+自动检测的异常：
+
+| 类型 | 判据 | 级别 |
+|---|---|---|
+| `factor_drop` | 复权因子环比下调 > 1% | 错误 |
+| `close_out_of_range` | `$close` 不在 `[$low, $high]` | 错误 |
+| `missing_day` | 区间内该股缺该交易日（可能停牌） | 提示 |
+| `big_move` | 真实价单日涨跌超阈值（A股 10.5% / 美股 25%） | 提示 |
+| `us_unadjusted_split` | 美股 factor≡1 且价格跳变（疑似未复权拆股） | 提示 |
+
+自检：`.venv\Scripts\python.exe web\selftest.py`
+
+### 添加股票
+
+工具栏「＋ 添加股票」：输入代码或名称（如 `600519` / `AAPL` / `茅台`）搜索，
+东方财富 suggest 接口会自动带出 `secid`、市场、名称与腾讯代码，确认后即可加入。
+后台依次执行：写入 `config/symbols.yaml` → 抓取全历史行情（腾讯源，行数异常时自动
+改走东财源）→ `dump_bin` 重建 provider；进度实时回显，约需 1~2 分钟。
+
+- 写入前校验代码/名称/`secid` 格式；重名或 `secid` 已存在会拒绝；任一步失败自动回滚配置。
+- 美股腾讯代码按交易所自动加后缀（NASDAQ `.OQ` / NYSE `.N` / AMEX `.A`）。
+- 仅本机 `127.0.0.1` 监听，写入接口同样只经 Cloudflare Access 登录后方可访问。
+
+> 默认只监听 `127.0.0.1`（回环）。公网访问经 Cloudflare Tunnel 转发，
+> 由 Cloudflare Access 做邮箱登录，不直接暴露端口。
+
+---
+
 ## 重新抓取数据
 
 CSV 已随仓库提供，通常不需要重跑。需要更新到最新行情时：
@@ -182,6 +225,7 @@ python scripts\dump_bin.py dump_all --data_path data\selfmade\cn --qlib_dir data
 | `scripts/dump_bin.py` | Qlib 官方 v0.9.7 脚本 |
 | `explore/_common.py` | 路径与股票池的单一来源 |
 | `explore/00~05_*.py` | 六个概念脚本 |
+| `web/` | 数据检视网站（Flask + ECharts，含「添加股票」入口） |
 | `notes/concepts.md` | 踩坑记录与概念详解 |
 | `notes/architecture.md` | Qlib 库架构、模块划分与可扩展点 |
 | `data/_raw_cache/` | API 原始响应，可复现性的最后保险 |

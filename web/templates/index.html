@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qlib 数据检视器</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">Qlib 数据检视器</div>
+  <div class="brand-sub">data/selfmade · CSV 为数据本体 · 真实价 = $price / $factor</div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="side-title">股票池 <span id="pool-count"></span></div>
+    <div id="symbol-list" class="sym-list"></div>
+  </aside>
+
+  <main class="main">
+    <div class="toolbar">
+      <div class="cur">
+        <span id="cur-name">—</span>
+        <span id="cur-code" class="cur-code"></span>
+      </div>
+      <div class="spacer"></div>
+      <label class="ctl">口径
+        <select id="price-mode">
+          <option value="real">真实成交价</option>
+          <option value="hfq">后复权价</option>
+        </select>
+      </label>
+      <label class="ctl"><input type="checkbox" id="log-scale"> 对数轴</label>
+      <label class="ctl"><input type="checkbox" id="show-anom" checked> 标注异常</label>
+      <button id="btn-add" class="btn btn-primary">＋ 添加股票</button>
+      <button id="btn-bin" class="btn">校验 .bin</button>
+    </div>
+
+    <div id="summary" class="summary"></div>
+    <div id="chart" class="chart"></div>
+    <div id="bin-result" class="bin-result"></div>
+
+    <div class="anom-wrap">
+      <div class="side-title">异常清单 <span id="anom-count" class="muted"></span></div>
+      <div id="anom-table" class="anom-table"></div>
+    </div>
+
+    <div class="legend">
+      <span><i class="dot dot-error"></i> 错误 (因子下调 / OHLC 越界)</span>
+      <span><i class="dot dot-info"></i> 提示 (异动 / 缺失日 / 未复权拆股)</span>
+    </div>
+  </main>
+</div>
+
+<div id="modal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-head">
+      <span>添加股票</span>
+      <button id="modal-close" class="modal-x" title="关闭">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-row">
+        <input id="add-search" placeholder="输入代码或名称，如 600519 / AAPL / 茅台">
+        <button id="add-search-btn" class="btn">搜索</button>
+      </div>
+      <div id="add-results" class="add-results"></div>
+
+      <div id="add-form" class="add-form hidden">
+        <div class="add-title">确认信息（可修改）</div>
+        <table>
+          <tr><td>市场</td><td><span id="f-market"></span></td></tr>
+          <tr><td>代码</td><td><input id="f-code"></td></tr>
+          <tr><td>名称</td><td><input id="f-name"></td></tr>
+          <tr><td>secid</td><td><input id="f-secid"></td></tr>
+          <tr><td>腾讯代码</td><td><input id="f-tencent"></td></tr>
+          <tr><td>qlib 名</td><td><input id="f-qlib"></td></tr>
+        </table>
+        <button id="add-submit" class="btn btn-primary">开始添加</button>
+        <span class="hint">将写入 config/symbols.yaml 并抓取全历史行情，约需 1~2 分钟</span>
+      </div>
+
+      <div id="add-log" class="add-log"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
