@@ -2,21 +2,26 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="format-detection" content="telephone=no">
 <title>Qlib 数据检视器</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
+  <button id="nav-toggle" class="nav-toggle" title="显示/隐藏股票池">☰</button>
   <div class="brand">Qlib 数据检视器</div>
   <div class="brand-sub">data/selfmade · CSV 为数据本体 · 真实价 = $price / $factor</div>
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
-    <div class="side-title">股票池 <span id="pool-count"></span></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="side-title" id="side-toggle">股票池 <span id="pool-count"></span><span class="chev">▾</span></div>
     <div id="symbol-list" class="sym-list"></div>
   </aside>
+
+  <div class="resizer" id="resizer" title="拖动调整宽度"></div>
 
   <main class="main">
     <div class="toolbar">

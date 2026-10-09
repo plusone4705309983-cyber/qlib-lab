@@ -17,6 +17,9 @@ const ERROR = "#e5484d";
 const INFO = "#8a9099";
 
 const $ = (id) => document.getElementById(id);
+const MQ_NARROW = window.matchMedia("(max-width: 760px)");
+const isShort = () => window.innerHeight < 620;
+let viewMode = "";
 
 function fmt(v) {
   if (v === null || v === undefined) return "—";
@@ -71,6 +74,7 @@ async function selectSymbol(market, symbol) {
   state.market = market;
   state.symbol = symbol;
   markActive();
+  if (MQ_NARROW.matches) $("sidebar").classList.add("collapsed");
   $("bin-result").innerHTML = "";
   const res = await fetch(`/api/kline?market=${market}&symbol=${symbol}`);
   const data = await res.json();
@@ -125,25 +129,45 @@ function renderChart(p) {
     }
   }
 
-  const start = Math.max(0, dates.length - 260);
+  const narrow = MQ_NARROW.matches;
+  const short = isShort();
+  const tiny = narrow || short;
+  viewMode = (narrow ? "n" : "d") + (short ? "s" : "");
+  const barsShown = narrow ? 60 : (short ? 120 : 260);
+  const start = Math.max(0, dates.length - barsShown);
   const zoom = [
     { type: "inside", xAxisIndex: [0, 1, 2], startValue: start, endValue: dates.length - 1 },
-    { type: "slider", xAxisIndex: [0, 1, 2], bottom: 6, height: 18, startValue: start, endValue: dates.length - 1 },
+    { type: "slider", xAxisIndex: [0, 1, 2], bottom: 4, height: tiny ? 14 : 18, startValue: start, endValue: dates.length - 1 },
   ];
 
   const axisIdx = [0, 1, 2];
-  const grids = [
-    { left: 64, right: 26, top: 24, height: "46%" },
-    { left: 64, right: 26, top: "56%", height: "10%" },
-    { left: 64, right: 26, top: "71%", height: "16%" },
-  ];
+  let grids;
+  if (narrow) {
+    grids = [
+      { left: 46, right: 8, top: 18, height: "50%" },
+      { left: 46, right: 8, top: "66%", height: "9%" },
+      { left: 46, right: 8, top: "79%", height: "13%" },
+    ];
+  } else if (short) {
+    grids = [
+      { left: 54, right: 12, top: 12, height: "52%" },
+      { left: 54, right: 12, top: "64%", height: "8%" },
+      { left: 54, right: 12, top: "76%", height: "12%" },
+    ];
+  } else {
+    grids = [
+      { left: 64, right: 26, top: 24, height: "46%" },
+      { left: 64, right: 26, top: "56%", height: "10%" },
+      { left: 64, right: 26, top: "71%", height: "16%" },
+    ];
+  }
   const xAxes = axisIdx.map((n) => ({
     type: "category",
     gridIndex: n,
     data: dates,
     boundaryGap: true,
     axisLine: { lineStyle: { color: "#c8ccd2" } },
-    axisLabel: { show: n === 2, color: "#6b7280" },
+    axisLabel: { show: n === 2, color: "#6b7280", fontSize: tiny ? 10 : 11, hideOverlap: true },
     axisTick: { show: false },
     splitLine: { show: false },
   }));
@@ -293,7 +317,68 @@ $("show-anom").onchange = (e) => {
   if (state.payload) renderChart(state.payload);
 };
 $("btn-bin").onclick = checkBin;
-window.addEventListener("resize", () => state.chart && state.chart.resize());
+
+// 图表容器尺寸变化(拖动侧栏 / 折叠 / 旋转)时重绘
+if (window.ResizeObserver) {
+  new ResizeObserver(() => state.chart && state.chart.resize()).observe($("chart"));
+}
+
+// 窄屏: 折叠/展开顶部股票池
+$("side-toggle").onclick = () => {
+  $("sidebar").classList.toggle("collapsed");
+  if (state.chart) state.chart.resize();
+};
+
+// 侧栏宽度可拖动 + 本地记忆
+const sidebarEl = $("sidebar");
+(function initResizer() {
+  const w = parseInt(localStorage.getItem("sidebarW") || "", 10);
+  if (w >= 140 && w <= 440) sidebarEl.style.flexBasis = w + "px";
+  const resizer = $("resizer");
+  let dragging = false;
+  resizer.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    resizer.classList.add("dragging");
+    try { resizer.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault();
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const w2 = Math.max(140, Math.min(440, e.clientX - sidebarEl.getBoundingClientRect().left));
+    sidebarEl.style.flexBasis = w2 + "px";
+    if (state.chart) state.chart.resize();
+  });
+  window.addEventListener("pointerup", () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove("dragging");
+    localStorage.setItem("sidebarW", String(Math.round(sidebarEl.getBoundingClientRect().width)));
+  });
+})();
+
+// 顶部 ☰ 按钮: 整块隐藏/显示股票池 (桌面/横屏)
+$("nav-toggle").onclick = () => {
+  document.body.classList.toggle("nav-collapsed");
+  localStorage.setItem("navCollapsed", document.body.classList.contains("nav-collapsed") ? "1" : "0");
+  if (state.chart) state.chart.resize();
+};
+function syncNav() {
+  if (MQ_NARROW.matches) document.body.classList.remove("nav-collapsed");
+  else if (localStorage.getItem("navCollapsed") === "1") document.body.classList.add("nav-collapsed");
+}
+syncNav();
+
+// 视口变化: 竖屏/横屏/桌面模式切换时重绘, 否则仅 resize
+function onViewportChange() {
+  const m = (MQ_NARROW.matches ? "n" : "d") + (isShort() ? "s" : "");
+  if (m !== viewMode && state.payload) renderChart(state.payload);
+  else if (state.chart) state.chart.resize();
+}
+window.addEventListener("resize", onViewportChange);
+window.addEventListener("orientationchange", onViewportChange);
+if (MQ_NARROW.addEventListener) MQ_NARROW.addEventListener("change", () => { syncNav(); onViewportChange(); });
+
+if (MQ_NARROW.matches) sidebarEl.classList.add("collapsed");
 
 // ---------------------------------------------------------------- 添加股票
 const addState = { polling: null, shown: 0 };

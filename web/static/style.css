@@ -13,6 +13,8 @@
 
 * { box-sizing: border-box; }
 
+html { -webkit-text-size-adjust: 100%; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -33,6 +35,43 @@ header {
 .brand { font-size: 16px; font-weight: 700; }
 .brand-sub { color: var(--muted); font-size: 12px; }
 
+.nav-toggle {
+  width: 32px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 6px;
+  font-size: 15px;
+  line-height: 1;
+  color: #4a5058;
+  cursor: pointer;
+}
+.nav-toggle:hover { background: #eef2f7; }
+
+.resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+}
+.resizer::before {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: var(--line);
+}
+.resizer:hover::before, .resizer.dragging::before { background: var(--accent); }
+
+body.nav-collapsed .sidebar {
+  width: 0 !important;
+  flex: 0 0 0 !important;
+  padding: 0;
+  border: none;
+  overflow: hidden;
+}
+body.nav-collapsed .resizer { display: none; }
+
 .layout { display: flex; height: calc(100vh - 46px); }
 
 .sidebar {
@@ -51,6 +90,8 @@ header {
   border-bottom: 1px solid var(--line);
   margin-bottom: 6px;
 }
+
+.chev { display: none; color: var(--muted); font-size: 11px; }
 
 .sym-list { display: flex; flex-direction: column; gap: 2px; }
 
@@ -233,4 +274,53 @@ header {
 .add-log.show { display: block; }
 .add-log .ok { color: #7ee787; }
 .add-log .err { color: #ff7b72; }
+
+/* ---------------- 移动端适配 ---------------- */
+@media (max-width: 760px) {
+  header { padding: 10px 12px; gap: 8px; }
+  .brand { font-size: 15px; }
+  .brand-sub { display: none; }
+  .resizer, .nav-toggle { display: none; }
+
+  .layout { flex-direction: column; height: auto; }
+  .sidebar {
+    width: 100%;
+    flex: none;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+  .side-title { cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+  .chev { display: inline-block; transition: transform 0.15s; }
+  .sidebar.collapsed .sym-list { display: none; }
+  .sidebar.collapsed .chev { transform: rotate(-90deg); }
+
+  .main { overflow: visible; padding: 10px; }
+  .toolbar { flex-wrap: wrap; gap: 8px 10px; }
+  .spacer { display: none; }
+  .cur { width: 100%; }
+  .btn { padding: 7px 12px; }
+  .ctl select { padding: 6px 8px; }
+
+  .chart { height: 68vh; min-height: 360px; }
+  .anom-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .anom-table table { min-width: 520px; }
+  .legend { flex-wrap: wrap; gap: 6px 16px; }
+
+  .modal { width: 100%; max-width: 100%; border-radius: 0; }
+  .modal-backdrop { padding-top: 0; align-items: flex-start; }
+  .modal-body { max-height: calc(100vh - 49px); overflow-y: auto; }
+  .add-form td:first-child { width: 64px; }
+}
+
+/* 矮屏(多为手机横屏): 图表占满可视高度, 避免只剩顶部一截 */
+@media (min-width: 761px) and (max-height: 620px) {
+  header { padding: 8px 14px; }
+  .main { padding: 8px 12px; }
+  .chart { height: calc(100vh - 118px); min-height: 220px; }
+  .anom-wrap { margin-top: 8px; }
+  .anom-table { max-height: 30vh; }
+  .legend { padding: 6px 2px; }
+}
 

@@ -21,6 +21,15 @@ import view  # noqa: E402
 from flask import Flask, jsonify, render_template, request  # noqa: E402
 
 app = Flask(__name__)
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
+
+@app.after_request
+def _no_cache(resp):
+    # 静态资源改由浏览器带 ETag 重新校验; HTML 不缓存, 避免手机上拿到旧页面
+    if resp.mimetype == "text/html":
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/")
