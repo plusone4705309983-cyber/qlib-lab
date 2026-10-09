@@ -292,12 +292,25 @@ def _tencent_page(code: str, end: str, fq: str) -> list[list]:
 
 
 def fetch_tencent(code: str, fq: str, beg: str, end: str = "", max_pages: int = 40) -> dict:
+    """抓腾讯日线。end 格式 YYYYMMDD; 缺省或晚于今天 = 取到最新, 否则截到该日。
+
+    分页游标 (cursor) 用腾讯要求的 YYYY-MM-DD; 首次请求由 end 换算而来,
+    之后每页用本页最早日往前推一天 (腾讯 param 的第 4 段 = 截止日)。
+    """
     beg_d = datetime.strptime(beg, "%Y%m%d").date()
     today = date.today()
+    if end:
+        try:
+            end_d = min(datetime.strptime(end, "%Y%m%d").date(), today)
+        except ValueError:
+            raise ValueError(f"--end 需为 YYYYMMDD, 收到 {end!r}")
+    else:
+        end_d = today
+    # 与旧行为逐字节一致: end 缺省/未来时游标留空 (= 腾讯"最新"), 不显式传日期
+    cursor = "" if end_d >= today else end_d.strftime("%Y-%m-%d")
     rows: dict[str, list] = {}
-    end = ""
     for _ in range(max_pages):
-        page = _tencent_page(code, end, fq)
+        page = _tencent_page(code, cursor, fq)
         if not page:
             break
         fresh = [p for p in page if p[0] not in rows]
@@ -307,10 +320,10 @@ def fetch_tencent(code: str, fq: str, beg: str, end: str = "", max_pages: int = 
         stop = datetime.strptime(earliest, "%Y-%m-%d").date()
         if stop <= beg_d or len(fresh) < TEN_PAGE:
             break
-        end = (stop - timedelta(days=1)).strftime("%Y-%m-%d")
-    keep = sorted(d for d in rows if beg_d <= datetime.strptime(d, "%Y-%m-%d").date() <= today)
+        cursor = (stop - timedelta(days=1)).strftime("%Y-%m-%d")
+    keep = sorted(d for d in rows if beg_d <= datetime.strptime(d, "%Y-%m-%d").date() <= end_d)
     if not keep:
-        raise RuntimeError(f"腾讯源无数据 code={code} fq={fq}")
+        raise RuntimeError(f"腾讯源无数据 code={code} fq={fq} end={end or 'latest'}")
     return {"klines": [",".join(str(x) for x in (rows[d][0], rows[d][1], rows[d][2], rows[d][3],
                                                  rows[d][4], float(rows[d][5]))) for d in keep]}
 
