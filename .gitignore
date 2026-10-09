@@ -59,6 +59,7 @@ Desktop.ini
 # ---- 日志与临时文件 ----
 *.log
 *.tmp
+web/logs/
 nohup.out
 
 # ---- 密钥与凭证 (保险起见, 永远不要提交) ----

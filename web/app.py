@@ -1,6 +1,6 @@
 """Qlib 数据检视器 —— Flask 应用 (只读)。
 
-    python web/app.py                 # 默认 127.0.0.1:8000 (供 Cloudflare Tunnel)
+    python web/app.py                 # 默认 127.0.0.1:8853 (供 Cloudflare Tunnel)
     python web/app.py --port 8080
     python web/app.py --debug         # Flask 自带调试服务器
 
@@ -134,7 +134,7 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description="Qlib 数据检视器")
     ap.add_argument("--host", default="127.0.0.1", help="默认 127.0.0.1 (回环, 供隧道转发)")
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--port", type=int, default=8853)
     ap.add_argument("--debug", action="store_true", help="用 Flask 调试服务器")
     args = ap.parse_args()
 

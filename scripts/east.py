@@ -198,10 +198,13 @@ def _cache_path(key: str) -> Path:
     return d / f"{h}.json"
 
 
+USE_CACHE = True
+
+
 def fetch_cached(secid: str, fqt: int, beg: str, end: str, min_gap: float = 2.5) -> dict:
     key = f"{secid}|{fqt}|{beg}|{end}|{KLT}"
     path = _cache_path(key)
-    if path.exists():
+    if USE_CACHE and path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -330,7 +333,7 @@ def fetch_tencent(code: str, fq: str, beg: str, end: str = "", max_pages: int = 
 
 def _tencent_cached(code: str, fq: str, beg: str, end: str) -> dict:
     path = _cache_path(f"TEN|{code}|{fq}|{beg}|{end}")
-    if path.exists():
+    if USE_CACHE and path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -368,10 +371,16 @@ def main() -> None:
     ap.add_argument("--throttle", type=float, default=4.0, help="每只股票之间的间隔秒数")
     ap.add_argument("--min-gap", type=float, default=2.5, help="同一 IP 两次请求的最小间隔秒数")
     ap.add_argument("--source", default="eastmoney", choices=["eastmoney", "tencent"])
+    ap.add_argument("--no-cache", action="store_true",
+                    help="忽略本地 _raw_cache, 强制重新拉取 (刷新到最新交易日用)")
     ap.add_argument("--symbol", action="append", default=None, metavar="QLIB_NAME",
                     help="只重建指定股票, 可重复: --symbol sh600519 --symbol sz000001; "
                          "缺省 = 重建整个 --market (会全量重跑该市场所有股票)")
     args = ap.parse_args()
+
+    global USE_CACHE
+    if args.no_cache:
+        USE_CACHE = False
 
     install_resolver()
     market = cfg["markets"][args.market]

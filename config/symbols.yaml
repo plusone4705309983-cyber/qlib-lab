@@ -9,17 +9,19 @@ markets:
     csv_dir: data/selfmade/cn
     bin_dir: data/selfmade/cn_bin
     symbols:
-      - { qlib: sh600519, secid: "1.600519",  tencent: sh600519,  name: "贵州茅台" }
-      - { qlib: sz000001, secid: "0.000001",  tencent: sz000001,  name: "平安银行" }
-      - { qlib: sz300750, secid: "0.300750",  tencent: sz300750,  name: "宁德时代" }
-      - { qlib: sh601318, secid: "1.601318",  tencent: sh601318,  name: "中国平安" }
+    - {qlib: sh600519, secid: "1.600519", tencent: sh600519, name: "贵州茅台"}
+    - {qlib: sz000001, secid: "0.000001", tencent: sz000001, name: "平安银行"}
+    - {qlib: sz300750, secid: "0.300750", tencent: sz300750, name: "宁德时代"}
+    - {qlib: sh601318, secid: "1.601318", tencent: sh601318, name: "中国平安"}
+    - {qlib: sh600036, secid: '1.600036', tencent: sh600036, name: 招商银行}
 
   us:
     qlib_region: us
     csv_dir: data/selfmade/us
     bin_dir: data/selfmade/us_bin
     symbols:
-      - { qlib: aapl, secid: "105.AAPL",  tencent: usAAPL.OQ,  name: "苹果"   }
-      - { qlib: tsla, secid: "105.TSLA",  tencent: usTSLA.OQ,  name: "特斯拉" }
-      - { qlib: nvda, secid: "105.NVDA",  tencent: usNVDA.OQ,  name: "英伟达" }
-      - { qlib: msft, secid: "105.MSFT",  tencent: usMSFT.OQ,  name: "微软"   }
+    - {qlib: aapl, secid: "105.AAPL", tencent: usAAPL.OQ, name: "苹果"}
+    - {qlib: tsla, secid: "105.TSLA", tencent: usTSLA.OQ, name: "特斯拉"}
+    - {qlib: nvda, secid: "105.NVDA", tencent: usNVDA.OQ, name: "英伟达"}
+    - {qlib: msft, secid: "105.MSFT", tencent: usMSFT.OQ, name: "微软"}
+    - {qlib: spcx, secid: 105.SPCX, tencent: usSPCX.OQ, name: SpaceX}

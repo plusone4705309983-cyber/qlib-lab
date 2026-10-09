@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 CONFIG_PATH = ROOT / "config" / "symbols.yaml"
+LOGS_DIR = ROOT / "web" / "logs"
 
 SEARCH_URL = (
     "https://searchapi.eastmoney.com/api/suggest/get"
@@ -209,9 +210,15 @@ def _dump(market: str, log) -> None:
 # ---------------------------------------------------------------- 任务
 def _run_job(job_id: str, p: dict) -> None:
     job = _jobs[job_id]
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    logpath = LOGS_DIR / f"add_stock-{job_id.split('-', 1)[-1]}.log"
+    fh = logpath.open("w", encoding="utf-8")
 
     def log(msg):
-        job["log"].append(str(msg))
+        s = str(msg)
+        job["log"].append(s)
+        fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {s}\n")
+        fh.flush()
 
     try:
         market, qlib = p["market"], p["qlib"]
@@ -248,6 +255,8 @@ def _run_job(job_id: str, p: dict) -> None:
         job["error"] = str(exc)
         log(f"错误: {exc}")
     finally:
+        log(f"日志已保存: {logpath}")
+        fh.close()
         job["done"] = True
         with _lock:
             _active["running"] = False
