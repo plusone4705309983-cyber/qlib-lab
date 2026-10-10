@@ -36,6 +36,17 @@
           <option value="hfq">后复权价</option>
         </select>
       </label>
+      <label class="ctl">指标
+        <select id="indicator">
+          <option value="">无</option>
+          <option value="ma">均线 MA(5/10/20/60)</option>
+          <option value="ema">指数均线 EMA(12/26)</option>
+          <option value="boll">布林带 BOLL(20,2)</option>
+          <option value="macd">MACD(12,26,9)</option>
+          <option value="rsi">RSI(6/12/24)</option>
+          <option value="atr">ATR(14)</option>
+        </select>
+      </label>
       <label class="ctl"><input type="checkbox" id="log-scale"> 对数轴</label>
       <label class="ctl"><input type="checkbox" id="show-anom" checked> 标注异常</label>
       <button id="btn-add" class="btn btn-primary">＋ 添加股票</button>

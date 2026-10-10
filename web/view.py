@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -44,12 +46,13 @@ def markets() -> list[str]:
 
 
 def reload() -> None:
-    """重新读取 config/symbols.yaml 并清空日历缓存 (常驻服务添加股票后调用)。"""
+    """重新读取 config/symbols.yaml 并清空日历/指标缓存 (常驻服务添加股票后调用)。"""
     import yaml
 
     with (ROOT / "config" / "symbols.yaml").open(encoding="utf-8") as fh:
         _common.CFG = yaml.safe_load(fh)
     _cal_cache.clear()
+    _ind_cache.clear()
 
 
 def symbols() -> list[dict]:
@@ -106,6 +109,7 @@ def load_rows(market: str, qlib: str) -> list[dict]:
 
 
 _cal_cache: dict[str, list[str]] = {}
+_ind_cache: dict = {}
 
 
 def market_calendar(market: str) -> list[str]:
@@ -119,6 +123,39 @@ def market_calendar(market: str) -> list[str]:
                 dates.add(row["date"])
         _cal_cache[market] = sorted(dates)
     return _cal_cache[market]
+
+
+# --- 技术指标 -------------------------------------------------------------
+def compute_indicators(market: str, qlib: str, mode: str = "real") -> dict:
+    """用 qlib 表达式引擎计算常用指标 (子进程隔离, 带内存缓存)。
+
+    mode: real = 真实成交价口径,  hfq = 后复权价口径。
+    返回 {dates, node, series:{ma5..atr14}}; 全部指标在脚本里用 D.features
+    一次算完, 结果缓存, 切换指标只在前端切换显示, 无需再次请求。
+    """
+    qlib = qlib.lower()
+    if mode not in ("real", "hfq"):
+        mode = "real"
+    key = (market, qlib, mode)
+    hit = _ind_cache.get(key)
+    if hit is not None:
+        return hit
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent / "indicators.py"), market, qlib, mode],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "指标计算失败").strip().splitlines()
+        raise RuntimeError(msg[-1] if msg else "指标计算失败")
+    lines = [x for x in proc.stdout.splitlines() if x.strip().startswith("{")]
+    if not lines:
+        raise RuntimeError("指标计算无输出")
+    result = json.loads(lines[-1])
+    _ind_cache[key] = result
+    return result
 
 
 # --- 检测 -----------------------------------------------------------------

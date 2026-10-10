@@ -9,12 +9,29 @@ const state = {
   log: false,
   showAnom: true,
   chart: null,
+  indicator: "",       // "" | ma | ema | boll | macd | rsi | atr
+  indData: null,       // 当前标的+口径的指标数据
+  indCache: {},        // market|symbol|mode -> 指标数据
 };
 
 const UP = "#d94838";
 const DOWN = "#1a9e5c";
 const ERROR = "#e5484d";
 const INFO = "#8a9099";
+
+// 各指标分组: overlay 叠加在价格主图, sub 单独子面板
+const IND_META = {
+  ma: { kind: "overlay", lines: [
+    ["ma5", "MA5", "#f2a22d"], ["ma10", "MA10", "#3b7dd8"],
+    ["ma20", "MA20", "#9b59b6"], ["ma60", "MA60", "#5a6b7b"]] },
+  ema: { kind: "overlay", lines: [
+    ["ema12", "EMA12", "#e67e22"], ["ema26", "EMA26", "#2980b9"]] },
+  boll: { kind: "overlay", lines: [
+    ["boll_up", "上轨", "#c0392b"], ["boll_mid", "中轨", "#7f8c8d"], ["boll_low", "下轨", "#27ae60"]] },
+  macd: { kind: "sub", pane: "macd" },
+  rsi: { kind: "sub", pane: "rsi" },
+  atr: { kind: "sub", pane: "atr" },
+};
 
 const $ = (id) => document.getElementById(id);
 const MQ_NARROW = window.matchMedia("(max-width: 760px)");
@@ -70,6 +87,32 @@ function markActive() {
 }
 
 // ---------------------------------------------------------------- 数据
+async function ensureIndicators() {
+  if (!state.indicator) {
+    state.indData = null;
+    return;
+  }
+  const key = `${state.market}|${state.symbol}|${state.mode}`;
+  if (state.indCache[key]) {
+    state.indData = state.indCache[key];
+    return;
+  }
+  try {
+    const url = `/api/indicators?market=${state.market}&symbol=${state.symbol}&mode=${state.mode}`;
+    const d = await (await fetch(url)).json();
+    if (d.error) {
+      console.warn("指标计算失败:", d.error);
+      state.indData = null;
+      return;
+    }
+    state.indCache[key] = d;
+    state.indData = d;
+  } catch (e) {
+    console.warn("指标加载失败:", e);
+    state.indData = null;
+  }
+}
+
 async function selectSymbol(market, symbol) {
   state.market = market;
   state.symbol = symbol;
@@ -78,16 +121,19 @@ async function selectSymbol(market, symbol) {
   $("bin-result").innerHTML = "";
   const res = await fetch(`/api/kline?market=${market}&symbol=${symbol}`);
   const data = await res.json();
+  if (state.market !== market || state.symbol !== symbol) return;
   if (data.error) {
     $("summary").textContent = data.error;
     return;
   }
   state.payload = data;
+  state.indData = null;
   $("cur-name").textContent = data.meta.name;
   $("cur-code").textContent = `${data.meta.market_label} · ${data.meta.symbol.toUpperCase()} · ${data.meta.currency}`;
   renderSummary(data);
-  renderChart(data);
   renderAnomalies(data);
+  await ensureIndicators();
+  if (state.market === market && state.symbol === symbol) renderChart(data);
 }
 
 function renderSummary(p) {
@@ -129,20 +175,60 @@ function renderChart(p) {
     }
   }
 
+  const ind = state.indData && state.indicator ? state.indData : null;
+  const meta = ind ? IND_META[state.indicator] : null;
+  const hasSub = !!meta && meta.kind === "sub";
+  const hasOverlay = !!meta && meta.kind === "overlay";
+
   const narrow = MQ_NARROW.matches;
   const short = isShort();
   const tiny = narrow || short;
   viewMode = (narrow ? "n" : "d") + (short ? "s" : "");
   const barsShown = narrow ? 60 : (short ? 120 : 260);
   const start = Math.max(0, dates.length - barsShown);
+  const lastAxis = hasSub ? 3 : 2;
+  const axisIdx = [0, 1, 2].concat(hasSub ? [3] : []);
   const zoom = [
-    { type: "inside", xAxisIndex: [0, 1, 2], startValue: start, endValue: dates.length - 1 },
-    { type: "slider", xAxisIndex: [0, 1, 2], bottom: 4, height: tiny ? 14 : 18, startValue: start, endValue: dates.length - 1 },
+    { type: "inside", xAxisIndex: axisIdx, startValue: start, endValue: dates.length - 1 },
+    { type: "slider", xAxisIndex: axisIdx, bottom: 4, height: tiny ? 14 : 18, startValue: start, endValue: dates.length - 1 },
   ];
 
-  const axisIdx = [0, 1, 2];
+  // 指标按日期对齐到 K 线 (指标日期 == CSV 交易日, 这里再按日期映射兜底)
+  let indGet = null;
+  if (ind) {
+    const im = {};
+    ind.dates.forEach((d, k) => { im[d] = k; });
+    indGet = (key) => dates.map((d) => {
+      const k = im[d];
+      return k === undefined ? null : ind.series[key][k];
+    });
+  }
+
   let grids;
-  if (narrow) {
+  if (hasSub) {
+    if (narrow) {
+      grids = [
+        { left: 46, right: 8, top: 16, height: "40%" },
+        { left: 46, right: 8, top: "58%", height: "8%" },
+        { left: 46, right: 8, top: "68%", height: "10%" },
+        { left: 46, right: 8, top: "80%", height: "13%" },
+      ];
+    } else if (short) {
+      grids = [
+        { left: 54, right: 12, top: 10, height: "42%" },
+        { left: 54, right: 12, top: "54%", height: "7%" },
+        { left: 54, right: 12, top: "63%", height: "9%" },
+        { left: 54, right: 12, top: "74%", height: "13%" },
+      ];
+    } else {
+      grids = [
+        { left: 64, right: 26, top: 18, height: "37%" },
+        { left: 64, right: 26, top: "57%", height: "8%" },
+        { left: 64, right: 26, top: "67%", height: "10%" },
+        { left: 64, right: 26, top: "79%", height: "13%" },
+      ];
+    }
+  } else if (narrow) {
     grids = [
       { left: 46, right: 8, top: 18, height: "50%" },
       { left: 46, right: 8, top: "66%", height: "9%" },
@@ -167,7 +253,7 @@ function renderChart(p) {
     data: dates,
     boundaryGap: true,
     axisLine: { lineStyle: { color: "#c8ccd2" } },
-    axisLabel: { show: n === 2, color: "#6b7280", fontSize: tiny ? 10 : 11, hideOverlap: true },
+    axisLabel: { show: n === lastAxis, color: "#6b7280", fontSize: tiny ? 10 : 11, hideOverlap: true },
     axisTick: { show: false },
     splitLine: { show: false },
   }));
@@ -176,6 +262,15 @@ function renderChart(p) {
     { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
     { scale: true, gridIndex: 2, splitNumber: 3, splitLine: { lineStyle: { color: "#eef0f3" } } },
   ];
+  if (hasSub) {
+    if (meta.pane === "rsi") {
+      yAxes.push({ gridIndex: 3, min: 0, max: 100, splitNumber: 2, splitLine: { lineStyle: { color: "#eef0f3" } } });
+    } else if (meta.pane === "atr") {
+      yAxes.push({ scale: true, gridIndex: 3, splitNumber: 2, splitLine: { lineStyle: { color: "#eef0f3" } } });
+    } else {
+      yAxes.push({ scale: true, gridIndex: 3, splitNumber: 3, splitLine: { lineStyle: { color: "#eef0f3" } } });
+    }
+  }
 
   const series = [
     {
@@ -197,6 +292,46 @@ function renderChart(p) {
       lineStyle: { color: "#2563eb", width: 1.4 },
       areaStyle: { color: "rgba(37,99,235,0.06)" },
     },
+  ];
+
+  if (hasOverlay && indGet) {
+    for (const [key, label, color] of meta.lines) {
+      series.push({
+        type: "line",
+        name: label,
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        data: indGet(key),
+        showSymbol: false,
+        lineStyle: { color: color, width: 1.2 },
+        z: 5,
+      });
+    }
+  }
+  if (hasSub && indGet) {
+    const x = { xAxisIndex: 3, yAxisIndex: 3 };
+    if (meta.pane === "macd") {
+      const hist = indGet("macd_hist");
+      series.push({
+        type: "bar",
+        name: "MACD",
+        ...x,
+        data: hist.map((v) => ({ value: v, itemStyle: { color: v === null ? INFO : (v >= 0 ? UP : DOWN) } })),
+        barWidth: "60%",
+      });
+      series.push({ type: "line", name: "DIF", ...x, data: indGet("macd_dif"), showSymbol: false, lineStyle: { color: "#f2a22d", width: 1.2 } });
+      series.push({ type: "line", name: "DEA", ...x, data: indGet("macd_dea"), showSymbol: false, lineStyle: { color: "#3b7dd8", width: 1.2 } });
+    } else if (meta.pane === "rsi") {
+      const cols = [["rsi6", "RSI6", "#f2a22d"], ["rsi12", "RSI12", "#3b7dd8"], ["rsi24", "RSI24", "#9b59b6"]];
+      for (const [key, label, color] of cols) {
+        series.push({ type: "line", name: label, ...x, data: indGet(key), showSymbol: false, lineStyle: { color, width: 1.2 } });
+      }
+    } else if (meta.pane === "atr") {
+      series.push({ type: "line", name: "ATR(14)", ...x, data: indGet("atr14"), showSymbol: false, lineStyle: { color: "#e67e22", width: 1.2 } });
+    }
+  }
+
+  series.push(
     {
       type: "scatter",
       name: "错误",
@@ -218,8 +353,17 @@ function renderChart(p) {
       symbolSize: 9,
       itemStyle: { color: INFO, opacity: 0.85 },
       z: 9,
-    },
-  ];
+    }
+  );
+
+  let indTip = [];
+  if (hasOverlay && indGet) {
+    indTip = meta.lines.map(([key, label]) => [label, indGet(key)]);
+  } else if (hasSub && indGet) {
+    if (meta.pane === "macd") indTip = [["DIF", indGet("macd_dif")], ["DEA", indGet("macd_dea")], ["MACD", indGet("macd_hist")]];
+    else if (meta.pane === "rsi") indTip = [["RSI6", indGet("rsi6")], ["RSI12", indGet("rsi12")], ["RSI24", indGet("rsi24")]];
+    else if (meta.pane === "atr") indTip = [["ATR(14)", indGet("atr14")]];
+  }
 
   state.chart.setOption({
     animation: false,
@@ -240,6 +384,12 @@ function renderChart(p) {
           `开 ${fmt(c[0])}　高 ${fmt(c[3])}<br/>` +
           `低 ${fmt(c[2])}　收 ${fmt(c[1])}<br/>` +
           `量 ${fmtInt(p.volume[i])}　因子 ${factor[i]}`;
+        if (indTip.length) {
+          html += "<br/>" + indTip.map(([label, arr]) => {
+            const v = arr[i];
+            return `· ${label} ${v === null || v === undefined ? "—" : fmt(v)}`;
+          }).join("　");
+        }
         if (a.length) {
           html += "<br/><br/>" + a.map((x) => `· <span style="color:${x.level === "error" ? ERROR : INFO}">${x.msg}</span>`).join("<br/>");
         }
@@ -304,8 +454,16 @@ async function checkBin() {
 }
 
 // ---------------------------------------------------------------- 事件
-$("price-mode").onchange = (e) => {
+$("price-mode").onchange = async (e) => {
   state.mode = e.target.value;
+  if (state.payload) {
+    await ensureIndicators();
+    renderChart(state.payload);
+  }
+};
+$("indicator").onchange = async (e) => {
+  state.indicator = e.target.value;
+  await ensureIndicators();
   if (state.payload) renderChart(state.payload);
 };
 $("log-scale").onchange = (e) => {
@@ -477,6 +635,7 @@ function pollJob(jobId, btn) {
       clearInterval(addState.polling);
       btn.disabled = false;
       if (job.status === "ok") {
+        state.indCache = {};
         await loadSymbols();
         if (job.result) selectSymbol(job.result.market, job.result.qlib);
       }

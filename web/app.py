@@ -54,6 +54,19 @@ def api_kline():
         return jsonify({"error": f"CSV 不存在: {exc.filename}"}), 404
 
 
+@app.get("/api/indicators")
+def api_indicators():
+    market = request.args.get("market", "cn")
+    symbol = request.args.get("symbol", "").lower()
+    mode = request.args.get("mode", "real")
+    if view.find(market, symbol) is None:
+        return jsonify({"error": f"未配置的标的: {market}/{symbol}"}), 404
+    try:
+        return jsonify(view.compute_indicators(market, symbol, mode))
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.get("/api/check_bin")
 def api_check_bin():
     market = request.args.get("market", "cn")
