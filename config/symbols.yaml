@@ -14,6 +14,7 @@ markets:
     - {qlib: sz300750, secid: "0.300750", tencent: sz300750, name: "宁德时代"}
     - {qlib: sh601318, secid: "1.601318", tencent: sh601318, name: "中国平安"}
     - {qlib: sh600036, secid: '1.600036', tencent: sh600036, name: 招商银行}
+    - {qlib: sh601985, secid: '1.601985', tencent: sh601985, name: 中国核电}
 
   us:
     qlib_region: us
