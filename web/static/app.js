@@ -165,10 +165,20 @@ function renderChart(p) {
   dates.forEach((d, i) => { idxOf[d] = i; });
   const errPts = [];
   const infoPts = [];
+  const buyPts = [];
+  const sellPts = [];
   if (state.showAnom) {
     for (const a of p.anomalies) {
       const i = idxOf[a.date];
       if (i === undefined) continue;
+      if (a.type.startsWith("signal_")) {
+        // 技术信号: 看多标记在下方, 看空标记在上方
+        const bullish = a.level === "info";
+        const y = bullish ? src.low[i] * 0.97 : src.high[i] * 1.03;
+        const pt = { value: [i, y], name: a.date, anom: a };
+        (bullish ? buyPts : sellPts).push(pt);
+        continue;
+      }
       const y = src.high[i] * 1.03;
       const pt = { value: [i, y], name: a.date, anom: a };
       (a.level === "error" ? errPts : infoPts).push(pt);
@@ -353,6 +363,30 @@ function renderChart(p) {
       symbolSize: 9,
       itemStyle: { color: INFO, opacity: 0.85 },
       z: 9,
+    },
+    {
+      type: "scatter",
+      name: "看多信号",
+      xAxisIndex: 0,
+      yAxisIndex: 0,
+      data: buyPts,
+      symbol: "triangle",
+      symbolSize: 10,
+      symbolOffset: [0, -2],
+      itemStyle: { color: UP },
+      z: 11,
+    },
+    {
+      type: "scatter",
+      name: "看空信号",
+      xAxisIndex: 0,
+      yAxisIndex: 0,
+      data: sellPts,
+      symbol: "triangle",
+      symbolRotate: 180,
+      symbolSize: 10,
+      itemStyle: { color: DOWN },
+      z: 11,
     }
   );
 
@@ -408,13 +442,18 @@ function renderAnomalies(p) {
     box.innerHTML = `<div class="empty">未发现异常</div>`;
     return;
   }
+  const lvlLabel = { error: "错误", warn: "警示", info: "提示" };
   const rows = p.anomalies
-    .map(
-      (a) =>
+    .map((a) => {
+      const isSig = a.type.startsWith("signal_");
+      const cls = isSig ? (a.level === "warn" ? "signal-warn" : "signal") : a.level;
+      const label = isSig ? "信号" : (lvlLabel[a.level] || "提示");
+      return (
         `<tr><td class="date">${a.date}</td>` +
-        `<td><span class="tag ${a.level}">${a.level === "error" ? "错误" : "提示"}</span></td>` +
+        `<td><span class="tag ${cls}">${label}</span></td>` +
         `<td>${a.msg}</td></tr>`
-    )
+      );
+    })
     .join("");
   box.innerHTML = `<table><thead><tr><th>日期</th><th>级别</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table>`;
 }

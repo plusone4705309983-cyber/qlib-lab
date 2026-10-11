@@ -20,6 +20,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "explore"))
 
 import _common  # noqa: E402
+try:
+    from web import signals  # noqa: E402
+except Exception:
+    try:
+        import signals  # noqa: E402
+    except Exception:
+        signals = None  # noqa: E402
 
 # --- 异常判定阈值 ---------------------------------------------------------
 # 后复权因子只应单调不减 (分红/送转只会抬高)。阈值与 scripts/east.py 的
@@ -245,7 +252,7 @@ def _stats(rows, anomalies):
 
 
 # --- 组装 payload ---------------------------------------------------------
-def payload(market: str, qlib: str) -> dict:
+def payload(market: str, qlib: str, include_signals: bool = True) -> dict:
     qlib = qlib.lower()
     meta = find(market, qlib)
     if meta is None:
@@ -269,6 +276,15 @@ def payload(market: str, qlib: str) -> dict:
                     }
                 )
         anomalies.sort(key=lambda x: (x["date"], x["type"]))
+    # 合并技术信号
+    try:
+        if include_signals and signals is not None:
+            sigs = signals.compute_signals(market, qlib, mode='real')
+            for s in sigs['signals']:
+                anomalies.append({'date': s['date'], 'type': f'signal_{s["type"]}', 'level': s['level'], 'msg': s['msg']})
+            anomalies.sort(key=lambda x: (x['date'], x['type']))
+    except Exception:
+        pass
 
     def arr(field, nd):
         return [round(r[field], nd) for r in rows]

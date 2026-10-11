@@ -113,6 +113,20 @@ def api_check_bin():
     return jsonify(result)
 
 
+@app.get("/api/signals")
+def api_signals():
+    market = request.args.get("market", "cn")
+    symbol = request.args.get("symbol", "").lower()
+    mode = request.args.get("mode", "real")
+    if view.find(market, symbol) is None:
+        return jsonify({"error": f"未配置的标的: {market}/{symbol}"}), 404
+    try:
+        import signals as sigmod
+        return jsonify(sigmod.compute_signals(market, symbol, mode))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.get("/healthz")
 def healthz():
     return "ok"
