@@ -12,6 +12,8 @@ const state = {
   indicator: "",       // "" | ma | ema | boll | macd | rsi | atr
   indData: null,       // 当前标的+口径的指标数据
   indCache: {},        // market|symbol|mode -> 指标数据
+  anomOnlySig: false,  // 异常清单: 只看信号
+  anomYears: 0,        // 异常清单: 时间范围 (0=全部)
 };
 
 const UP = "#d94838";
@@ -132,6 +134,7 @@ async function selectSymbol(market, symbol) {
   $("cur-code").textContent = `${data.meta.market_label} · ${data.meta.symbol.toUpperCase()} · ${data.meta.currency}`;
   renderSummary(data);
   renderAnomalies(data);
+  renderBacktest(data);
   await ensureIndicators();
   if (state.market === market && state.symbol === symbol) renderChart(data);
 }
@@ -435,15 +438,33 @@ function renderChart(p) {
 }
 
 // ---------------------------------------------------------------- 异常表
+function signalCutoff(p) {
+  if (!state.anomYears || !p.dates.length) return null;
+  const last = p.dates[p.dates.length - 1];
+  const y = parseInt(last.slice(0, 4), 10) - state.anomYears;
+  return `${y}${last.slice(4)}`;
+}
+
+function filteredAnomalies(p) {
+  const cutoff = signalCutoff(p);
+  return p.anomalies.filter((a) => {
+    if (state.anomOnlySig && !a.type.startsWith("signal_")) return false;
+    if (cutoff && a.date < cutoff) return false;
+    return true;
+  });
+}
+
 function renderAnomalies(p) {
   const box = $("anom-table");
-  $("anom-count").textContent = `共 ${p.anomalies.length} 条`;
-  if (!p.anomalies.length) {
-    box.innerHTML = `<div class="empty">未发现异常</div>`;
+  const list = filteredAnomalies(p);
+  $("anom-count").textContent = list.length === p.anomalies.length
+    ? `共 ${list.length} 条` : `筛选 ${list.length} / 共 ${p.anomalies.length} 条`;
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">当前筛选下无记录</div>`;
     return;
   }
   const lvlLabel = { error: "错误", warn: "警示", info: "提示" };
-  const rows = p.anomalies
+  const rows = list
     .map((a) => {
       const isSig = a.type.startsWith("signal_");
       const cls = isSig ? (a.level === "warn" ? "signal-warn" : "signal") : a.level;
@@ -456,6 +477,37 @@ function renderAnomalies(p) {
     })
     .join("");
   box.innerHTML = `<table><thead><tr><th>日期</th><th>级别</th><th>说明</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderBacktest(p) {
+  const wrap = $("bt-wrap");
+  const box = $("bt-table");
+  const bt = p.signal_backtest;
+  if (!bt || !Object.keys(bt).length) {
+    wrap.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  wrap.style.display = "";
+  const hs = (p.signal_horizons && p.signal_horizons.length) ? p.signal_horizons : [5, 10, 20];
+  const labels = p.signal_labels || {};
+  const order = ["ma_gold_cross", "ma_death_cross", "macd_cross_up", "macd_cross_down", "rsi_overbought", "rsi_oversold"];
+  const types = order.filter((t) => bt[t]).concat(Object.keys(bt).filter((t) => !order.includes(t)));
+  const head = `<tr><th>信号</th><th>方向</th>` + hs.map((h) => `<th>${h}日胜率</th>`).join("") + `</tr>`;
+  const body = types.map((t) => {
+    const bullish = bt[t][hs[0]] ? bt[t][hs[0]].bullish : false;
+    const dir = `<span class="bt-dir ${bullish ? "up" : "down"}">${bullish ? "看多" : "看空"}</span>`;
+    const cells = hs.map((h) => {
+      const c = bt[t][h];
+      if (!c || !c.n) return `<td class="bt-empty">—</td>`;
+      const wr = (c.win_rate * 100).toFixed(1);
+      const ar = (c.avg_ret * 100).toFixed(1);
+      const col = c.win_rate >= 0.55 ? "bt-good" : (c.win_rate <= 0.45 ? "bt-bad" : "");
+      return `<td class="${col}"><b>${wr}%</b><span class="bt-sub">均值 ${ar >= 0 ? "+" : ""}${ar}% · n=${c.n}</span></td>`;
+    }).join("");
+    return `<tr><td>${labels[t] || t}</td><td>${dir}</td>${cells}</tr>`;
+  }).join("");
+  box.innerHTML = `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
 // ---------------------------------------------------------------- .bin 校验
@@ -512,6 +564,14 @@ $("log-scale").onchange = (e) => {
 $("show-anom").onchange = (e) => {
   state.showAnom = e.target.checked;
   if (state.payload) renderChart(state.payload);
+};
+$("anom-only-sig").onchange = (e) => {
+  state.anomOnlySig = e.target.checked;
+  if (state.payload) renderAnomalies(state.payload);
+};
+$("anom-years").onchange = (e) => {
+  state.anomYears = parseInt(e.target.value, 10) || 0;
+  if (state.payload) renderAnomalies(state.payload);
 };
 $("btn-bin").onclick = checkBin;
 

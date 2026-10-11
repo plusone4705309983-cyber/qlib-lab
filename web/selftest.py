@@ -48,6 +48,26 @@ def test_payload_signals():
         check("信号异常结构", all(k in s0 for k in ("date","type","level","msg")))
 
 
+def test_backtest():
+    print("[3] 信号回测统计")
+    p = view.payload("cn", "sh600519")
+    bt = p.get("signal_backtest")
+    check("payload 含 signal_backtest", bool(bt))
+    check("含持有期", bool(p.get("signal_horizons")), str(p.get("signal_horizons")))
+    check("含中文标签", bool(p.get("signal_labels")))
+    if bt:
+        h = p["signal_horizons"][0]
+        cell = bt.get("ma_gold_cross", {}).get(h)
+        if cell is None:
+            cell = bt.get("ma_gold_cross", {}).get(str(h))
+        check("金叉回测存在", bool(cell))
+        if cell:
+            check("回测字段完整", all(k in cell for k in ("n", "win_rate", "avg_ret", "bullish")))
+            check("胜率 0~1", 0.0 <= (cell["win_rate"] or 0) <= 1.0)
+            check("样本 > 0", cell["n"] > 0)
+            check("金叉为看多", cell["bullish"] is True)
+
+
 def test_indicators():
     print("[3] 技术指标 API/结构")
     from web import app as webapp
@@ -69,6 +89,7 @@ def test_indicators():
 if __name__ == "__main__":
     test_config_and_csv()
     test_payload_signals()
+    test_backtest()
     test_indicators()
     print(f"\n结果: {PASS} PASS / {FAIL} FAIL")
     sys.exit(1 if FAIL else 0)

@@ -58,8 +58,25 @@
     <div id="bin-result" class="bin-result"></div>
 
     <div class="anom-wrap">
-      <div class="side-title">异常清单 <span id="anom-count" class="muted"></span></div>
+      <div class="side-title">
+        异常清单 <span id="anom-count" class="muted"></span>
+        <span class="anom-filters">
+          <label class="ctl small"><input type="checkbox" id="anom-only-sig"> 只看信号</label>
+          <select id="anom-years" class="mini" title="时间范围">
+            <option value="0" selected>全部</option>
+            <option value="1">近1年</option>
+            <option value="3">近3年</option>
+            <option value="5">近5年</option>
+            <option value="10">近10年</option>
+          </select>
+        </span>
+      </div>
       <div id="anom-table" class="anom-table"></div>
+    </div>
+
+    <div class="bt-wrap" id="bt-wrap" style="display:none">
+      <div class="side-title">信号回测统计 <span class="muted">信号后 N 个交易日真实价收益 · 胜率=方向正确占比</span></div>
+      <div id="bt-table" class="bt-table"></div>
     </div>
 
     <div class="legend">

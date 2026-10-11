@@ -277,14 +277,20 @@ def payload(market: str, qlib: str, include_signals: bool = True) -> dict:
                 )
         anomalies.sort(key=lambda x: (x["date"], x["type"]))
     # 合并技术信号
-    try:
-        if include_signals and signals is not None:
+    signal_backtest = None
+    signal_labels: dict = {}
+    signal_horizons: list = []
+    if include_signals and signals is not None:
+        try:
             sigs = signals.compute_signals(market, qlib, mode='real')
             for s in sigs['signals']:
                 anomalies.append({'date': s['date'], 'type': f'signal_{s["type"]}', 'level': s['level'], 'msg': s['msg']})
             anomalies.sort(key=lambda x: (x['date'], x['type']))
-    except Exception:
-        pass
+            signal_backtest = sigs.get('backtest')
+            signal_labels = sigs.get('labels', {})
+            signal_horizons = sigs.get('horizons', [])
+        except Exception:
+            pass
 
     def arr(field, nd):
         return [round(r[field], nd) for r in rows]
@@ -313,6 +319,9 @@ def payload(market: str, qlib: str, include_signals: bool = True) -> dict:
         "volume": [int(r["volume"]) for r in rows],
         "factor": arr("factor", _factor_round),
         "anomalies": anomalies,
+        "signal_backtest": signal_backtest,
+        "signal_labels": signal_labels,
+        "signal_horizons": signal_horizons,
         "stats": _stats(rows, anomalies),
     }
 

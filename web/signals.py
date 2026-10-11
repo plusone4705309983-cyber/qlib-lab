@@ -15,6 +15,22 @@ RSI_OVERBOUGHT = 80.0
 RSI_OVERSOLD = 20.0
 EPS = 1e-6
 
+# 回测持有期 (交易日)
+HORIZONS = (5, 10, 20)
+
+# 信号类型 -> 中文标签
+SIGNAL_LABELS = {
+    "ma_gold_cross": "MA金叉",
+    "ma_death_cross": "MA死叉",
+    "macd_cross_up": "MACD翻红",
+    "macd_cross_down": "MACD翻绿",
+    "rsi_overbought": "RSI超买",
+    "rsi_oversold": "RSI超卖",
+}
+
+# 看多(info) / 看空(warn)
+BULLISH = {"ma_gold_cross", "macd_cross_up", "rsi_oversold"}
+
 
 def _num_safe(x):
     if x is None:
@@ -37,14 +53,53 @@ def _view():
     return view
 
 
+def _backtest(dates, closes, sigs, horizons=HORIZONS):
+    """按信号类型 + 持有期统计: n(样本), win_rate(方向正确比例), avg_ret(平均收益)。"""
+    idx = {d: i for i, d in enumerate(dates)}
+    acc = {}
+    for s in sigs:
+        i = idx.get(s["date"])
+        if i is None:
+            continue
+        bullish = s["type"] in BULLISH
+        for h in horizons:
+            j = i + h
+            if j >= len(closes):
+                continue
+            c0, c1 = closes[i], closes[j]
+            if not c0 or c0 != c0 or c1 is None or c1 != c1:
+                continue
+            ret = c1 / c0 - 1.0
+            win = (ret > 0.0) if bullish else (ret < 0.0)
+            cell = acc.setdefault(s["type"], {}).setdefault(h, {"n": 0, "win": 0, "sum": 0.0})
+            cell["n"] += 1
+            cell["win"] += 1 if win else 0
+            cell["sum"] += ret
+    out = {}
+    for t, hs in acc.items():
+        out[t] = {}
+        for h, c in hs.items():
+            n = c["n"]
+            out[t][h] = {
+                "n": n,
+                "win_rate": round(c["win"] / n, 4) if n else None,
+                "avg_ret": round(c["sum"] / n, 4) if n else None,
+                "bullish": t in BULLISH,
+            }
+    return out
+
+
 def compute_signals(market, qlib_sym, mode="real"):
-    """基于指标计算技术信号 (单股)。
+    """基于指标计算技术信号 (单股) + 回测统计。
 
     规则 (表达式等价):
       - MA 金叉/死叉:   MA5 上穿/下穿 MA20
       - MACD 翻红/翻绿: 柱状线 (DIF-DEA)*2 上穿/下穿 0
       - RSI 超买/超卖:  RSI6 进入 >=80 / <=20 区域 (状态切换时触发)
-    返回 {market, symbol, mode, dates, signals:[{date,type,level,msg}], count}
+    回测: 信号发生后 N 个交易日的真实价收益, N ∈ HORIZONS。
+    统计口径: win = 方向正确 (看多: 涨; 看空: 跌)。
+    返回 {market, symbol, mode, dates, signals:[{date,type,level,msg}], count,
+          backtest:{type:{h:{n,win_rate,avg_ret,bullish}}}, horizons, labels}
     """
     qlib_sym = qlib_sym.lower()
     if mode not in ("real", "hfq"):
@@ -53,6 +108,7 @@ def compute_signals(market, qlib_sym, mode="real"):
     ind = view.compute_indicators(market, qlib_sym, mode)
     pl = view.payload(market, qlib_sym, include_signals=False)
     dates = pl["dates"]
+    closes = pl["real"]["close"]
     idates = {d: i for i, d in enumerate(ind["dates"])}
     ss = ind["series"]
 
@@ -97,4 +153,16 @@ def compute_signals(market, qlib_sym, mode="real"):
         if k not in seen:
             seen.add(k)
             dedup.append(x)
-    return {"market": market, "symbol": qlib_sym, "mode": mode, "dates": dates, "signals": dedup, "count": len(dedup)}
+
+    backtest = _backtest(dates, closes, dedup)
+    return {
+        "market": market,
+        "symbol": qlib_sym,
+        "mode": mode,
+        "dates": dates,
+        "signals": dedup,
+        "count": len(dedup),
+        "backtest": backtest,
+        "horizons": list(HORIZONS),
+        "labels": SIGNAL_LABELS,
+    }

@@ -158,6 +158,10 @@ body.nav-collapsed .resizer { display: none; }
 .bin-result td, .bin-result th { border: 1px solid var(--line); padding: 3px 10px; text-align: left; }
 
 .anom-wrap { margin-top: 14px; }
+.anom-wrap .side-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.anom-filters { display: flex; align-items: center; gap: 10px; margin-left: auto; font-weight: 400; font-size: 12px; }
+.ctl.small { font-size: 12px; }
+.mini { padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; background: #fff; font-size: 12px; }
 .anom-table { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .anom-table table { width: 100%; border-collapse: collapse; }
 .anom-table th, .anom-table td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; }
@@ -171,6 +175,24 @@ body.nav-collapsed .resizer { display: none; }
 .tag.signal { background: #3b7dd8; }
 .tag.signal-warn { background: #9b59b6; }
 .tag.info { background: var(--info); }
+
+.bt-wrap { margin-top: 14px; }
+.bt-wrap .side-title { font-weight: 600; }
+.bt-wrap .side-title .muted { font-weight: 400; font-size: 12px; }
+.bt-table { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.bt-table table { width: 100%; border-collapse: collapse; }
+.bt-table th, .bt-table td { padding: 6px 10px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); text-align: center; white-space: nowrap; }
+.bt-table th:first-child, .bt-table td:first-child { text-align: left; }
+.bt-table th:last-child, .bt-table td:last-child { border-right: none; }
+.bt-table th { background: #f0f2f5; font-weight: 600; }
+.bt-table td b { font-variant-numeric: tabular-nums; }
+.bt-table .bt-sub { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
+.bt-table .bt-good { background: rgba(26,158,92,0.10); color: #157a46; }
+.bt-table .bt-bad { background: rgba(217,72,56,0.10); color: #b23a2b; }
+.bt-table .bt-empty { color: var(--muted); }
+.bt-dir { font-size: 11px; padding: 1px 7px; border-radius: 9px; color: #fff; }
+.bt-dir.up { background: var(--error); }
+.bt-dir.down { background: #1a9e5c; }
 
 .muted { color: var(--muted); font-weight: 400; }
 
