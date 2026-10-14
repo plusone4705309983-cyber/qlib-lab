@@ -16,6 +16,7 @@ markets:
     - {qlib: sh600036, secid: '1.600036', tencent: sh600036, name: 招商银行}
     - {qlib: sh601985, secid: '1.601985', tencent: sh601985, name: 中国核电}
     - {qlib: sh600584, secid: '1.600584', tencent: sh600584, name: 长电科技}
+    - {qlib: sz002077, secid: '0.002077', tencent: sz002077, name: 大港股份}
 
   us:
     qlib_region: us
