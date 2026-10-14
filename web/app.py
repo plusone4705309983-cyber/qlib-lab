@@ -127,6 +127,43 @@ def api_signals():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.get("/api/holders")
+def api_holders():
+    market = request.args.get("market", "cn")
+    symbol = request.args.get("symbol", "").lower()
+    if view.find(market, symbol) is None:
+        return jsonify({"error": f"未配置的标的: {market}/{symbol}"}), 404
+    try:
+        import holders
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"股东模块不可用: {exc}"}), 500
+    try:
+        return jsonify(holders.top_holders(market, symbol))
+    except holders.NotSupported as exc:
+        return jsonify({"error": str(exc)}), 404
+    except KeyError as exc:
+        return jsonify({"error": str(exc).strip("'\"")}), 404
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/holder_stocks")
+def api_holder_stocks():
+    name = request.args.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "缺少 name 参数"}), 400
+    try:
+        import holders
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"股东模块不可用: {exc}"}), 500
+    try:
+        return jsonify(holders.holder_stocks(name))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.get("/healthz")
 def healthz():
     return "ok"

@@ -47,6 +47,10 @@ function fmt(v) {
 function fmtInt(v) {
   return Number(v).toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 }
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 
 // ---------------------------------------------------------------- 侧栏
 async function loadSymbols() {
@@ -135,6 +139,7 @@ async function selectSymbol(market, symbol) {
   renderSummary(data);
   renderAnomalies(data);
   renderBacktest(data);
+  renderHolders(data);
   await ensureIndicators();
   if (state.market === market && state.symbol === symbol) renderChart(data);
 }
@@ -508,6 +513,117 @@ function renderBacktest(p) {
     return `<tr><td>${labels[t] || t}</td><td>${dir}</td>${cells}</tr>`;
   }).join("");
   box.innerHTML = `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+// ---------------------------------------------------------------- 股东穿透
+function clearHolders() {
+  $("hold-wrap").style.display = "none";
+  $("hold-meta").textContent = "";
+  $("hold-table").innerHTML = "";
+  $("hold-detail").innerHTML = "";
+}
+
+function dirCls(dir) {
+  if (dir === "减持") return "down";
+  if (dir === "增持" || dir === "新进") return "up";
+  return "";
+}
+function dirHtml(direction, change) {
+  const cls = dirCls(direction);
+  const chg = change ? `<span class="hchg">${change > 0 ? "+" : ""}${fmtInt(change)}</span>` : "";
+  return `<span class="hdir ${cls}">${esc(direction || "—")}</span>${chg}`;
+}
+
+async function renderHolders(p) {
+  if (p.meta.market !== "cn") { clearHolders(); return; }
+  const wrap = $("hold-wrap");
+  wrap.style.display = "";
+  $("hold-detail").innerHTML = "";
+  $("hold-table").innerHTML = "";
+  $("hold-meta").textContent = "加载中…";
+  let d;
+  try {
+    const res = await fetch(`/api/holders?market=${p.meta.market}&symbol=${p.meta.symbol}`);
+    d = await res.json();
+  } catch (e) {
+    $("hold-meta").textContent = "加载失败: " + e.message;
+    return;
+  }
+  if (state.symbol !== p.meta.symbol || state.market !== p.meta.market) return;
+  if (d.error) { $("hold-meta").textContent = d.error; return; }
+  $("hold-meta").textContent =
+    `报告期 ${d.end_date} · 共 ${d.count} 个主体 (十大股东 ∪ 十大流通股东)`;
+  const rows = (d.holders || []).map((h) => {
+    const tag = h.special
+      ? `<span class="htag sp">通道</span>`
+      : (h.is_org ? `<span class="htag org">机构</span>` : `<span class="htag person">自然人</span>`);
+    const ratio = h.hold_ratio === null || h.hold_ratio === undefined
+      ? "—" : h.hold_ratio.toFixed(2) + "%";
+    return `<tr>` +
+      `<td class="rank">${h.rank == null ? "" : h.rank}</td>` +
+      `<td><span class="hk-name" data-name="${esc(h.name)}" title="点击查看其持仓">${esc(h.name)}</span> ${tag}</td>` +
+      `<td class="num">${fmtInt(h.hold_num)}</td>` +
+      `<td class="num">${ratio}</td>` +
+      `<td>${dirHtml(h.direction, h.change)}</td>` +
+      `</tr>`;
+  }).join("");
+  $("hold-table").innerHTML =
+    `<table><thead><tr><th>#</th><th>股东</th><th>持股数</th><th>占比</th><th>变动</th></tr></thead><tbody>${rows}</tbody></table>`;
+  $("hold-table").querySelectorAll(".hk-name").forEach((el) => {
+    el.onclick = () => loadHolderStocks(el.dataset.name);
+  });
+}
+
+async function loadHolderStocks(name) {
+  const box = $("hold-detail");
+  box.innerHTML = `<div class="hold-loading">加载「${esc(name)}」的持仓…</div>`;
+  let d;
+  try {
+    const res = await fetch(`/api/holder_stocks?name=${encodeURIComponent(name)}`);
+    d = await res.json();
+  } catch (e) {
+    box.innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
+    return;
+  }
+  if (d.error) { box.innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  const pool = {};
+  state.catalog.forEach((s) => { pool[s.qlib] = s; });
+  const rows = (d.stocks || []).map((s) => {
+    const inPool = pool[s.symbol];
+    const nameCell = inPool
+      ? `<span class="hk-name" data-mkt="${inPool.market}" data-sym="${inPool.qlib}" title="在股票池中, 点击查看K线">${esc(s.name)}</span>`
+      : esc(s.name);
+    const codeCell = inPool
+      ? `<span class="code in-pool">${esc(s.symbol.toUpperCase())}</span>`
+      : `<span class="code">${esc(s.symbol.toUpperCase())}</span>`;
+    const ratio = s.hold_ratio === null || s.hold_ratio === undefined
+      ? "—" : s.hold_ratio.toFixed(2) + "%";
+    return `<tr>` +
+      `<td>${nameCell}</td>` +
+      `<td>${codeCell}</td>` +
+      `<td class="num">${fmtInt(s.hold_num)}</td>` +
+      `<td class="num">${ratio}</td>` +
+      `<td>${dirHtml(s.direction, s.change)}</td>` +
+      `</tr>`;
+  }).join("");
+  const warn = d.special
+    ? `<div class="hold-note warn">⚠ 该主体为通道/国家队 (如陆股通名义持有人), 其"持仓"不代表主动投资行为。</div>`
+    : "";
+  const trunc = d.truncated ? `<div class="hold-note">结果较多, 仅覆盖前若干报告期。</div>` : "";
+  box.innerHTML =
+    `<div class="hold-dhead"><b>${esc(name)}</b> 的持仓 <span class="muted">共 ${d.count} 只</span>` +
+    `<button class="mini-btn" id="hold-close">收起</button></div>` +
+    warn + trunc +
+    (d.stocks && d.stocks.length
+      ? `<table><thead><tr><th>股票</th><th>代码</th><th>持股数</th><th>占比</th><th>变动</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="empty">未查到持仓</div>`);
+  $("hold-close").onclick = () => { box.innerHTML = ""; };
+  box.querySelectorAll(".hk-name[data-sym]").forEach((el) => {
+    el.onclick = () => {
+      selectSymbol(el.dataset.mkt, el.dataset.sym);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+  });
 }
 
 // ---------------------------------------------------------------- .bin 校验
