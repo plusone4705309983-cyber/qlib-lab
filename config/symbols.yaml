@@ -17,6 +17,8 @@ markets:
     - {qlib: sh601985, secid: '1.601985', tencent: sh601985, name: 中国核电}
     - {qlib: sh600584, secid: '1.600584', tencent: sh600584, name: 长电科技}
     - {qlib: sz002077, secid: '0.002077', tencent: sz002077, name: 大港股份}
+    - {qlib: sh603950, secid: '1.603950', tencent: sh603950, name: 长源东谷}
+    - {qlib: sz301526, secid: '0.301526', tencent: sz301526, name: 国际复材}
 
   us:
     qlib_region: us
