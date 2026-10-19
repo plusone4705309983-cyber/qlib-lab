@@ -22,6 +22,7 @@ data/selfmade/cn_bin/
 └── features/<INSTRUMENT>/<field>.day.bin
     ├── close.day.bin  high.day.bin  low.day.bin
     ├── open.day.bin   volume.day.bin  factor.day.bin
+    ├── vwap.day.bin                         # 成交均价 (Alpha360/158 要)
 ```
 
 - `.bin` 是**裸 float32 数组**，无文件头，长度 = 该股票生效区间内的日历长度。
@@ -44,6 +45,7 @@ qlib 的字段契约（官方文档 `component/data.rst` 对每个字段的定�
 | `$low` | The adjusted lowest price | **后复权价** |
 | `$close` | The adjusted closing price | **后复权价** |
 | `$factor` | factor = adjusted_price / original_price | 后复权价 / 原始价 |
+| `$vwap` | The adjusted vwap price | **后复权成交均价**（本项目 CSV 的 `vwap` 列） |
 | 任意价格 / `$factor` | — | **真实成交价**，和券商 App 一致 |
 
 关键点：**OHLC 四个字段必须全部是复权价**，不只是 `close`。
@@ -185,6 +187,26 @@ allmkt = pd.concat([df_cn, df_us], axis=0)
 - A 股东财/腾讯的 volume 是**手**，入库时 ×100 换算成**股**（`--vol-mult 100`）
 - 美股本来就是**股**（`--vol-mult 1`）
 - 校验：茅台 2024-01-02 成交额 = **54.2 亿元**（`$close/$factor × $volume`，真实口径）
+
+### `$vwap` 列怎么来的
+
+Alpha360 有 **60 列**表达式引用 `$vwap`、Alpha158 有 1 列。CSV 里没有 vwap 时，
+这些列会被 `Fillna` 整列填成 0（等于白给 60 个废特征），所以 CSV 补了第 9 列
+`vwap`，口径是**后复权成交均价**，与 OHLC 同基——`$vwap/$close` 里 factor 自然约掉。
+
+- 真实值 = `成交额 / 成交量(股) * factor`。CSV 里的 volume 已经是**股**，所以直接
+  `amount / volume * factor`。
+- 成交额**只有东财日线 f57 给**（腾讯日线只有 6 段，实测无成交额），因此
+  `east.py` 价格继续走腾讯、成交额单独找东财要，独立缓存键 `AMT|{secid}|...`。
+- 自校验：真实均价必落在当日 `[low, high]` 内（0.5% 容差吃两边源的舍入），
+  越界 / 缺成交额 / 零成交一律退回典型价 `(H+L+C)/3`（同为后复权口径，不产生 NaN）。
+- 东财 `push2*` 若被限流（表现为所有 IP 立即 `RemoteDisconnected`，而
+  `datacenter-web` 正常），本次运行内直接降级，不逐股死等；恢复后重跑
+  `east.py`（见上「用法」）+ `dump_bin.py dump_all` 即可就地升级为真实成交额。
+- 验收口径：`$vwap` 的缺失格必须与 `$close` **完全同格**；Alpha360 里 vwap 列的
+  平均 NaN 数要等于非 vwap 列的平均 NaN 数。实测 = **113.1 vs 113.1 / 列**（cn）、
+  **29.5 vs 29.5 / 列**（us），说明 60 列不再是废列。
+- 备注：首次补列（2026-10-19）时东财 `push2his` 正被限流，15 只票走的是典型价回落。
 
 ---
 

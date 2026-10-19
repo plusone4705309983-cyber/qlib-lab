@@ -214,12 +214,75 @@ def fetch_cached(secid: str, fqt: int, beg: str, end: str, min_gap: float = 2.5)
     return data
 
 
-def _rows(data: dict) -> list[tuple[str, float, float, float, float, float]]:
+def _rows(data: dict) -> list[tuple[str, float, float, float, float, float, float | None]]:
+    """(date, open, close, high, low, volume, amount)。
+
+    东财日线第 7 段是成交额(f57, 元); 腾讯日线只有 6 段 -> amount=None。
+    """
     parsed = []
     for line in data["klines"]:
         p = line.split(",")
-        parsed.append((p[0], float(p[1]), float(p[2]), float(p[3]), float(p[4]), float(p[5])))
+        amount = None
+        if len(p) > 6:
+            try:
+                amount = float(p[6])
+            except ValueError:
+                amount = None
+        parsed.append((p[0], float(p[1]), float(p[2]), float(p[3]), float(p[4]),
+                       float(p[5]), amount))
     return parsed
+
+
+def fetch_amount(secid: str, beg: str, end: str, min_gap: float = 2.5) -> dict[str, float]:
+    """成交额 {日期: 元}, 从东财 fqt=0 取 —— 腾讯源没有成交额, 这是唯一的补法。
+
+    单独缓存键 AMT|..., 只存 {date: amount}, 体积远小于整条日线,
+    且与价格日线缓存分开: 价格走腾讯、成交额走东财, 互不覆盖。
+    拉取失败返回空 dict, 由 _calc_vwap 退回 (H+L+C)/3 代理价(不影响可用性)。
+    """
+    global _AMOUNT_DOWN
+    path = _cache_path(f"AMT|{secid}|{beg}|{end}|{KLT}")
+    if USE_CACHE and path.exists():
+        try:
+            got = json.loads(path.read_text(encoding="utf-8")).get("amount") or {}
+            if got:
+                return {str(k): float(v) for k, v in got.items()}
+        except Exception:
+            pass
+    if _AMOUNT_DOWN:
+        return {}                      # 本次运行内已判定东财不通, 后面每只票不再死等
+    try:
+        data = fetch_klines(secid, 0, beg, end, tries=3, min_gap=min_gap)
+    except Exception as exc:
+        _AMOUNT_DOWN = True
+        print(f"WARN [成交额] {exc}\n"
+              f"     东财成交额通道暂不可用 -> 全部 vwap 退回 (H+L+C)/3;"
+              f"恢复后重跑 east.py 即可就地升级为真实均价")
+        return {}
+    amount = {r[0]: r[6] for r in _rows(data) if r[6] is not None}
+    path.write_text(json.dumps({"amount": amount}, ensure_ascii=False), encoding="utf-8")
+    return amount
+
+
+_AMOUNT_DOWN = False
+
+
+def _calc_vwap(amount: float | None, volume: float, factor: float,
+               h: float, l: float, c: float) -> float:
+    """后复权成交均价 $vwap。
+
+    真实均价 = 成交额 / 成交量(股, CSV 里的 volume 已是股), 再乘 factor 转后复权口径,
+    与 OHLC 同基 (Alpha360 用 $vwap/$close, 因子在比值里约掉)。
+
+    自校验: 真实均价必落在当日 [low, high] 内 -> 乘 factor 后必落在后复权区间内。
+    越界 / 缺成交额 / 零成交时退回典型价 (H+L+C)/3, 同为后复权口径, 不出 NaN。
+    """
+    if amount and volume and volume > 0 and factor > 0:
+        v = amount / volume * factor
+        lo, hi = (l, h) if l <= h else (h, l)
+        if lo * 0.995 <= v <= hi * 1.005:      # 0.5% 容差吃掉两边源的四舍五入
+            return v
+    return (h + l + c) / 3.0
 
 
 MAX_FACTOR_DROP = 0.01
@@ -257,16 +320,18 @@ def _drop_factor_drops(rows: list[list], name: str = "") -> list[list]:
 def build_csv(secid: str, beg: str, end: str, vol_mult: float, min_gap: float = 2.5) -> list[list]:
     raw = {r[0]: r for r in _rows(fetch_cached(secid, 0, beg, end, min_gap))}
     adj = {r[0]: r for r in _rows(fetch_cached(secid, 2, beg, end, min_gap))}
+    amount = {d: raw[d][6] for d in raw if raw[d][6] is not None}   # fqt=0 自带成交额, 免费
 
     out = []
     for day in sorted(raw.keys() & adj.keys()):
-        _, adj_o, adj_c, adj_h, adj_l, _ = adj[day]
+        _, adj_o, adj_c, adj_h, adj_l, _, _ = adj[day]
         c = raw[day][2]
         factor = 1.0 if c == 0 else adj_c / c
         # fqt=2 是后复权, OHLC 全部取该口径, 与 $close 保持一致 (Qlib 字段契约)。
         # 成交量取 raw (复权不影响成交量), 手 -> 股。
-        out.append([day, adj_o, adj_h, adj_l, adj_c,
-                    raw[day][5] * vol_mult, factor])
+        volume = raw[day][5] * vol_mult
+        vwap = _calc_vwap(amount.get(day), volume, factor, adj_h, adj_l, adj_c)
+        out.append([day, adj_o, adj_h, adj_l, adj_c, volume, factor, vwap])
     return _drop_factor_drops(out, secid)
 
 
@@ -343,19 +408,23 @@ def _tencent_cached(code: str, fq: str, beg: str, end: str) -> dict:
     return data
 
 
-def build_csv_tencent(item: dict, beg: str, end: str, vol_mult: float) -> list[list]:
+def build_csv_tencent(item: dict, beg: str, end: str, vol_mult: float,
+                      min_gap: float = 2.5) -> list[list]:
     code = item["tencent"]
     raw = {r[0]: r for r in _rows(_tencent_cached(code, "", beg, end))}
     adj = {r[0]: r for r in _rows(_tencent_cached(code, "hfq", beg, end))}
+    # 腾讯日线无成交额 -> 单独找东财要 (secid 与腾讯 code 是同一只票)
+    amount = fetch_amount(item["secid"], beg, end, min_gap)
     out = []
     for day in sorted(raw.keys() & adj.keys()):
-        _, adj_o, adj_c, adj_h, adj_l, _ = adj[day]
+        _, adj_o, adj_c, adj_h, adj_l, _, _ = adj[day]
         c = raw[day][2]
         factor = 1.0 if c == 0 else adj_c / c
         # OHLC 全部取后复权口径, 与 $close 保持一致 (Qlib 字段契约)。
         # 成交量用 raw 的手数换算, 复权不影响成交量。
-        out.append([day, adj_o, adj_h, adj_l, adj_c,
-                    raw[day][5] * vol_mult, factor])
+        volume = raw[day][5] * vol_mult
+        vwap = _calc_vwap(amount.get(day), volume, factor, adj_h, adj_l, adj_c)
+        out.append([day, adj_o, adj_h, adj_l, adj_c, volume, factor, vwap])
     return _drop_factor_drops(out, code)
 
 
@@ -404,14 +473,14 @@ def main() -> None:
     for idx, item in enumerate(symbols):
         try:
             if args.source == "tencent":
-                rows = build_csv_tencent(item, args.beg, args.end, vol_mult)
+                rows = build_csv_tencent(item, args.beg, args.end, vol_mult, args.min_gap)
             else:
                 rows = build_csv(item["secid"], args.beg, args.end, vol_mult, args.min_gap)
             path = out_dir / f"{item['qlib']}.csv"
             with path.open("w", encoding="utf-8", newline="\n") as fh:
-                fh.write("date,symbol,open,high,low,close,volume,factor\n")
-                for day, o, h, l, c, v, f in rows:
-                    fh.write(f"{day},{item['qlib']},{o:.4f},{h:.4f},{l:.4f},{c:.4f},{v:.0f},{f:.6f}\n")
+                fh.write("date,symbol,open,high,low,close,volume,factor,vwap\n")
+                for day, o, h, l, c, v, f, w in rows:
+                    fh.write(f"{day},{item['qlib']},{o:.4f},{h:.4f},{l:.4f},{c:.4f},{v:.0f},{f:.6f},{w:.4f}\n")
             print(f"OK   {item['name']:<8} {item['secid']:<12} {len(rows):>5} 行  {rows[0][0]}~{rows[-1][0]}  -> {path.name}")
         except Exception as exc:
             print(f"FAIL {item['name']:<8} {item['secid']:<12} {exc}")

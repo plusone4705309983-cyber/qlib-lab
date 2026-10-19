@@ -4,8 +4,9 @@
     .venv\\Scripts\\python.exe web\\view.py
 
 数据来源 = data/selfmade/{cn,us}/*.csv (数据本体, 唯一事实来源)。
-每个 CSV 的列: date,symbol,open,high,low,close,volume,factor
-其中 open/high/low/close 是**后复权价**, trade = price / factor 为真实成交价。
+每个 CSV 的列: date,symbol,open,high,low,close,volume,factor,vwap
+其中 open/high/low/close 是**后复权价**, trade = price / factor 为真实成交价;
+vwap 是**后复权成交均价** ($vwap), 与 close 同口径, 给 Qlib 的 Alpha360/158 用。
 """
 
 from __future__ import annotations

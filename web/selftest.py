@@ -114,11 +114,46 @@ def test_holders():
     check("/api/holder_stocks 200", c.get("/api/holder_stocks?name=" + quote("香港中央结算有限公司")).status_code == 200)
 
 
+def test_vwap():
+    print("[5] CSV vwap 列 (Alpha360 60 列 / Alpha158 1 列依赖)")
+    import csv
+    root = HERE.parent / "data" / "selfmade"
+    syms = view.symbols()
+    checked = miss = oob = weird = 0
+    for s in syms:
+        p = root / s["market"] / f"{s['qlib']}.csv"
+        if not p.exists():
+            continue
+        with p.open(encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        if not rows or "vwap" not in rows[0]:
+            miss += 1
+            continue
+        for r in rows:
+            try:
+                v = float(r["vwap"])
+                lo, hi, c = float(r["low"]), float(r["high"]), float(r["close"])
+            except (TypeError, ValueError):
+                miss += 1
+                continue
+            lo, hi = min(lo, hi), max(lo, hi)
+            if not (lo * 0.995 <= v <= hi * 1.005):   # 与 east.py _calc_vwap 同容差
+                oob += 1
+            if not (0.5 <= v / c <= 1.5):             # vwap/$close 极端漂移即异常
+                weird += 1
+        checked += 1
+    check("每个 CSV 都有 vwap", miss == 0 and checked >= 8,
+          f"checked={checked}/{len(syms)} 缺列或坏值={miss}")
+    check("vwap 落在当日 [low,high]", oob == 0, f"越界 {oob} 行")
+    check("vwap/close ∈ [0.5,1.5]", weird == 0, f"异常 {weird} 行")
+
+
 if __name__ == "__main__":
     test_config_and_csv()
     test_payload_signals()
     test_backtest()
     test_indicators()
     test_holders()
+    test_vwap()
     print(f"\n结果: {PASS} PASS / {FAIL} FAIL")
     sys.exit(1 if FAIL else 0)
