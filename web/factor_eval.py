@@ -28,7 +28,8 @@ sys.path.insert(0, str(ROOT / "explore"))
 FIELDS = {"open", "high", "low", "close", "volume", "factor", "vwap"}
 
 # 允许调用的算子 (qlib.data.ops 注册表中的安全子集; 复数参数的
-# TResample/Rolling/PairRolling/ChangeInstrument 不开放, 避免语法歧义)
+# TResample/Rolling/PairRolling/ChangeInstrument 不开放, 避免语法歧义;
+# Mask(x, instrument) 需要字符串参数, 也不开放)
 OPS = {
     # 滚动
     "Ref", "Mean", "Std", "Var", "Med", "Min", "Max", "Sum", "Count",
@@ -37,7 +38,7 @@ OPS = {
     # 逐元素
     "Abs", "Log", "Sign", "Delta", "Power",
     # 条件 / 逻辑 / 比较
-    "If", "Mask", "Gt", "Ge", "Lt", "Le", "Eq", "Ne",
+    "If", "Gt", "Ge", "Lt", "Le", "Eq", "Ne",
     "Greater", "Less", "And", "Or", "Not",
     # 算术
     "Add", "Sub", "Mul", "Div",

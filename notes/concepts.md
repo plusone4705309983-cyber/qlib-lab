@@ -93,8 +93,10 @@ qlib 的字段契约（官方文档 `component/data.rst` 对每个字段的定�
 
 - **原始字段**（对应磁盘上的 `.bin`）：`$open $high $low $close $volume $factor $vwap`
 - **表达式**（qlib 的算子解析器现场算，不落盘）：
-  - 时序：`Ref(x, N)` `Mean(x, N)` `Sum/Std/Max/Min/Slope/Corr(x, N)` `Quantile(x, N)`
-  - 逻辑：`If(c, a, b)` `Greater/Less`
+  - 时序：`Ref(x, N)` `Mean(x, N)` `Sum/Std/Max/Min/Slope(x, N)` `Quantile(x, N, q)` `Corr(x, y, N)`
+  - 条件：`If(c, a, b)`；比较用 `Gt/Ge/Lt/Le/Eq/Ne` 或直接写 `> >= < <= == !=`
+  - `Greater(x, y)` / `Less(x, y)` 是**逐元素取大/取小**（`np.maximum/minimum`），不是比较！
+  - `IdxMax/IdxMin(x, N)` 返回窗口内的位置 `1..N`（**1 = 窗口最早，N = 当前**）
   - `Rank(x, N)` 是**滚动分位**（当前值在过去 N 日中的百分位，0~1），不是截面排名
   - `列[1]` / `列[2]` 取的是**未来** 1/2 期，只能给 label 用，特征里用了就是前视偏差
 
@@ -150,16 +152,22 @@ allmkt = pd.concat([df_cn, df_us], axis=0)
 |---|---|---|
 | 时序滚动 | `Ref Mean Std Var Med Min Max Sum Count Quantile Rank IdxMax IdxMin Slope Rsquare Resi EMA WMA Mad Kurt Skew Corr Cov` | `Op(x, N)`；`Rank` 返回 0~1 分位；`Slope/Rsquare/Resi` 是滚动线性回归 |
 | 逐元素 | `Abs Log Sign Delta Power` | `Delta(x,N) = x - Ref(x,N)` |
-| 条件 | `If(c, a, b)` `Mask(x, cond)` | |
-| 比较 | `Gt Ge Lt Le Eq Ne Greater Less` | 返回 0/1 |
-| 逻辑 | `And Or Not` | |
+| 条件 | `If(c, a, b)` | `cond` 为真取 `a`，否则 `b`（数值/=0 也可当条件） |
+| 比较 | `Gt Ge Lt Le Eq Ne` | 返回布尔序列；也可直接写 `> >= < <= == !=` |
+| 极值合并 | `Greater(x,y)` `Less(x,y)` | **逐元素取大/取小**，不是比较（比较用 `Gt/Lt`） |
+| 逻辑 | `And Or Not` | 只对布尔序列；`Not(x)` 单参；`&&`/`!` 不是合法 Python |
 | 算术 | `Add Sub Mul Div` | 也可以直接写 `+ - * /` |
 | 特征 | `$open $high $low $close $volume $factor $vwap` | 磁盘上的 7 个 `.bin` 字段 |
 
 注意：
 
+- `Rolling` 系全部用 `min_periods=1` → **窗口不满也出值**，`Mean($close,20)` 第 1 天就有数；
+  `N=0` 是 expanding，`0<N<1` 是 EWM（`alpha=N`）。只有 `Ref` 接受负数（取未来）。
 - 不能传字符串参数（`TResample` 的频率、`ChangeInstrument` 的 instrument 名），白名单里直接没开。
+  `Mask(x, instrument)` 需要 instrument 字符串，同样没开。
 - `Ref(x, -N)` 会取到**未来** N 期（qlib 允许负数）。构造 label 时有用，当特征用就是前视偏差。
+
+完整书写规则（字段/44 个算子/数字/优先级/报错对照/示例）见 `README.md` 的「表达式书写规则」。
 - qlib 内部对表达式是 `eval(parse_field(...))`（`qlib/data/data.py`），因此 web 端必须
   先做白名单校验，绝不能把用户输入原样丢进去 —— 见 `web/factor_eval.py` 的 `validate()`。
 

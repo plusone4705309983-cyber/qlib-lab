@@ -151,7 +151,8 @@ def test_vwap():
 def test_factor():
     print("[6] 因子实验室 /api/factor")
     import factor_eval
-    bad_cases = ["__import__('os')", "Foo($close,5)", "$bad+1", "'x'", "a[0]"]
+    bad_cases = ["__import__('os')", "Foo($close,5)", "$bad+1", "'x'", "a[0]",
+                 "Mask($close,sh600519)"]
     ok_bad = 0
     for bad in bad_cases:
         try:
