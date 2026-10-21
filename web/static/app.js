@@ -125,6 +125,7 @@ async function selectSymbol(market, symbol) {
   markActive();
   if (MQ_NARROW.matches) $("sidebar").classList.add("collapsed");
   $("bin-result").innerHTML = "";
+  clearFactor("已切换标的，点『计算』重新分析");
   const res = await fetch(`/api/kline?market=${market}&symbol=${symbol}`);
   const data = await res.json();
   if (state.market !== market || state.symbol !== symbol) return;
@@ -660,6 +661,263 @@ async function checkBin() {
   }
 }
 
+// ---------------------------------------------------------------- 因子实验室
+let factChart = null;
+let factBucketChart = null;
+const factState = { data: null, busy: false };
+
+const num3 = (v) => {
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  const a = Math.abs(v);
+  if (a >= 1000) return fmt(v);
+  if (a >= 1) return Number(v).toFixed(3);
+  return Number(v).toPrecision(3);
+};
+const signedPct = (v, nd = 2) => (v === null || v === undefined ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(nd)}%`);
+const plainPct = (v, nd = 2) => (v === null || v === undefined ? "—" : `${(v * 100).toFixed(nd)}%`);
+
+function factStatus(msg) {
+  $("fact-status").textContent = msg || "";
+}
+
+function clearFactor(msg) {
+  factState.data = null;
+  factStatus(msg || "");
+  $("fact-current").style.display = "none";
+  $("fact-current").innerHTML = "";
+  $("fact-ic").innerHTML = "";
+  $("fact-table").innerHTML = "";
+  if (factChart) { factChart.dispose(); factChart = null; }
+  if (factBucketChart) { factBucketChart.dispose(); factBucketChart = null; }
+  $("fact-chart").innerHTML = "";
+  $("fact-bucket-chart").innerHTML = "";
+}
+
+async function runFactor() {
+  if (!state.market || !state.symbol) { factStatus("请先在左侧选择一只股票"); return; }
+  if (factState.busy) return;
+  const expr = $("fact-expr").value.trim();
+  if (!expr) { factStatus("请输入因子表达式"); return; }
+  const market = state.market;
+  const symbol = state.symbol;
+  factState.busy = true;
+  $("fact-run").disabled = true;
+  factStatus("计算中… 首次会启动 qlib 子进程，约 5~15 秒");
+  try {
+    const url = `/api/factor?market=${market}&symbol=${symbol}&expr=${encodeURIComponent(expr)}`;
+    const res = await fetch(url);
+    const d = await res.json();
+    if (d.error) { factState.data = null; factStatus(`错误：${d.error}`); return; }
+    if (state.market !== market || state.symbol !== symbol) return;
+    factState.data = d;
+    factStatus(
+      `样本 ${fmtInt(d.count)} 天 · ${d.dates[0]} ~ ${d.dates[d.dates.length - 1]} · 分组 = 过去 ${d.hist_win} 日滚动分位` +
+        (d.note ? ` · ${d.note}` : "")
+    );
+    renderFactor(d);
+  } catch (e) {
+    factStatus(`请求失败：${e}`);
+  } finally {
+    factState.busy = false;
+    $("fact-run").disabled = false;
+  }
+}
+
+function renderFactor(d) {
+  renderFactCurrent(d);
+  renderFactIC(d);
+  renderFactTable(d);
+  renderFactChart(d);
+  renderFactBucketChart(d);
+}
+
+function renderFactCurrent(d) {
+  const box = $("fact-current");
+  const c = d.current;
+  if (!c) { box.style.display = "none"; return; }
+  const cls = c.level === "info" ? "up" : c.level === "warn" ? "down" : "";
+  const lvl = { info: ["看多", "signal"], warn: ["看空", "signal-warn"], neutral: ["中性", "info"] }[c.level] || ["中性", "info"];
+  box.className = `fact-current ${cls}`;
+  box.innerHTML = `
+    <div class="fc-head">
+      <span>当前读数</span><span>${c.date}</span>
+      <span class="tag ${lvl[1]}">${lvl[0]}</span>
+      <span class="muted">因子 ${num3(c.factor)} · 分位 ${plainPct(c.pct, 1)} · ${c.name}</span>
+    </div>
+    <div>${esc(c.msg)}</div>`;
+  box.style.display = "";
+}
+
+function renderFactIC(d) {
+  const items = d.horizons.map((h) => {
+    const it = d.ic[String(h)] || {};
+    if (it.ic === null || it.ic === undefined) return `<span>IC(${h}日) <b>—</b></span>`;
+    const cls = it.ic > 0 ? "pos" : it.ic < 0 ? "neg" : "";
+    return `<span>IC(${h}日) <b class="${cls}">${it.ic.toFixed(3)}</b> <span class="muted">n=${fmtInt(it.n)}</span></span>`;
+  });
+  items.push(`<span class="muted">IC = 因子值与未来 N 日收益的 Spearman 秩相关（描述性统计）</span>`);
+  $("fact-ic").innerHTML = items.join("");
+}
+
+function factCell(c) {
+  if (!c || c.avg_ret === null || c.avg_ret === undefined) {
+    return `<td class="bt-empty">—</td>`;
+  }
+  const cls = c.avg_ret > 0 ? "bt-good" : "bt-bad";
+  return `<td class="${cls}"><b>${signedPct(c.avg_ret)}</b><span class="bt-sub">胜率 ${plainPct(c.win_rate, 0)} · n=${fmtInt(c.n)}</span></td>`;
+}
+
+function renderFactTable(d) {
+  const hs = d.horizons;
+  const head = `<tr><th>分位组</th><th>组内样本</th><th>因子区间</th><th>历史分位</th>${hs
+    .map((h) => `<th>未来 ${h} 日</th>`)
+    .join("")}</tr>`;
+  const rows = d.buckets.map((b) => {
+    const cur = d.current && d.current.group === b.i ? "fact-cur-row" : "";
+    const fr = b.factor_lo === null ? "—" : `${num3(b.factor_lo)} ~ ${num3(b.factor_hi)}`;
+    const pr = b.pct_lo === null ? "—" : `${plainPct(b.pct_lo, 0)} ~ ${plainPct(b.pct_hi, 0)}`;
+    return `<tr class="${cur}"><td>${b.name}</td><td>${fmtInt(b.n)}</td><td>${fr}</td><td>${pr}</td>${hs
+      .map((h) => factCell(b.h[String(h)]))
+      .join("")}</tr>`;
+  });
+  const base = `<tr><td>全样本</td><td>—</td><td>—</td><td>—</td>${hs
+    .map((h) => factCell(d.overall[String(h)]))
+    .join("")}</tr>`;
+  $("fact-table").innerHTML = `<table><thead>${head}</thead><tbody>${rows.join("")}${base}</tbody></table>`;
+}
+
+function renderFactChart(d) {
+  if (!factChart) factChart = echarts.init($("fact-chart"));
+  factChart.setOption(
+    {
+      animation: false,
+      grid: { left: 62, right: 62, top: 30, bottom: 34 },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        formatter: (ps) => {
+          const lines = [`<b>${ps[0].axisValue}</b>`];
+          ps.forEach((p) => {
+            const v = p.seriesName === "因子" ? num3(p.value) : fmt(p.value);
+            lines.push(`${p.marker}${p.seriesName}: ${v}`);
+          });
+          return lines.join("<br>");
+        },
+      },
+      legend: { top: 0, left: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+      xAxis: {
+        type: "category",
+        data: d.dates,
+        axisLabel: { fontSize: 10, formatter: (v) => (v && v.slice(5) === "01-01" ? v.slice(0, 4) : "") },
+        axisTick: { show: false },
+      },
+      yAxis: [
+        { type: "value", name: "因子", scale: true, nameTextStyle: { fontSize: 11 }, axisLabel: { fontSize: 10 } },
+        {
+          type: "value",
+          name: "真实价",
+          scale: true,
+          nameTextStyle: { fontSize: 11 },
+          axisLabel: { fontSize: 10 },
+          splitLine: { show: false },
+        },
+      ],
+      dataZoom: [{ type: "inside" }],
+      series: [
+        {
+          name: "因子",
+          type: "line",
+          data: d.factor,
+          showSymbol: false,
+          sampling: "lttb",
+          lineStyle: { width: 1.3 },
+          color: "#3b7dd8",
+          connectNulls: false,
+        },
+        {
+          name: "真实价",
+          type: "line",
+          yAxisIndex: 1,
+          data: d.close_real,
+          showSymbol: false,
+          sampling: "lttb",
+          lineStyle: { width: 1, type: "dashed" },
+          color: "#8a9099",
+          connectNulls: false,
+        },
+      ],
+    },
+    true
+  );
+  factChart.resize();
+}
+
+function renderFactBucketChart(d) {
+  if (!factBucketChart) factBucketChart = echarts.init($("fact-bucket-chart"));
+  const colors = ["#f2a22d", "#3b7dd8", "#9b59b6"];
+  const series = d.horizons.map((h, i) => ({
+    name: `未来 ${h} 日`,
+    type: "bar",
+    data: d.buckets.map((b) => {
+      const c = b.h[String(h)];
+      return c && c.avg_ret !== null ? +(c.avg_ret * 100).toFixed(3) : null;
+    }),
+    itemStyle: { color: colors[i % colors.length] },
+    barMaxWidth: 34,
+  }));
+  factBucketChart.setOption(
+    {
+      animation: false,
+      grid: { left: 56, right: 20, top: 34, bottom: 28 },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: (ps) => {
+          const g = d.buckets[ps[0].dataIndex];
+          const lines = [`<b>${g.name}</b> <span style="color:#8a9099">样本 ${g.n}</span>`];
+          ps.forEach((p) => {
+            const c = g.h[String(d.horizons[p.seriesIndex])];
+            if (!c || c.avg_ret === null) {
+              lines.push(`${p.marker}${p.seriesName}: —`);
+            } else {
+              lines.push(`${p.marker}${p.seriesName}: ${signedPct(c.avg_ret)} · 胜率 ${plainPct(c.win_rate, 0)} · n=${c.n}`);
+            }
+          });
+          return lines.join("<br>");
+        },
+      },
+      legend: { top: 0, left: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+      xAxis: {
+        type: "category",
+        data: d.buckets.map((b) => b.name),
+        axisTick: { show: false },
+        axisLabel: { fontSize: 11 },
+      },
+      yAxis: {
+        type: "value",
+        name: "平均收益 %",
+        nameTextStyle: { fontSize: 11 },
+        axisLabel: { fontSize: 10, formatter: "{value}%" },
+      },
+      series,
+    },
+    true
+  );
+  factBucketChart.resize();
+}
+
+$("fact-run").onclick = runFactor;
+$("fact-expr").onkeydown = (e) => {
+  if (e.key === "Enter") runFactor();
+};
+$("fact-preset").onchange = (e) => {
+  const v = e.target.value;
+  if (!v) return;
+  $("fact-expr").value = v;
+  e.target.value = ""; // 复位, 便于重复选择同一预置重新计算
+  runFactor();
+};
+
 // ---------------------------------------------------------------- 事件
 $("price-mode").onchange = async (e) => {
   state.mode = e.target.value;
@@ -694,6 +952,10 @@ $("btn-bin").onclick = checkBin;
 // 图表容器尺寸变化(拖动侧栏 / 折叠 / 旋转)时重绘
 if (window.ResizeObserver) {
   new ResizeObserver(() => state.chart && state.chart.resize()).observe($("chart"));
+  new ResizeObserver(() => {
+    if (factChart) factChart.resize();
+    if (factBucketChart) factBucketChart.resize();
+  }).observe($("fact-wrap"));
 }
 
 // 窄屏: 折叠/展开顶部股票池

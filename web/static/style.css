@@ -387,3 +387,58 @@ body.nav-collapsed .resizer { display: none; }
   .legend { padding: 6px 2px; }
 }
 
+/* ------------------------------------------------------------ 因子实验室 */
+.fact-wrap { margin-top: 18px; }
+.fact-wrap .side-title { font-weight: 600; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fact-wrap .side-title .muted { font-weight: 400; font-size: 12px; }
+.fact-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 6px; }
+.fact-expr {
+  flex: 1 1 340px;
+  min-width: 200px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+  font-size: 13px;
+  color: var(--text);
+}
+.fact-expr:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12); }
+.fact-hint { font-size: 12px; color: var(--muted); line-height: 1.7; margin-bottom: 8px; }
+.fact-hint strong { color: #4a5058; font-weight: 600; }
+.fact-current {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--info);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px 12px;
+  margin: 8px 0;
+  line-height: 1.75;
+}
+.fact-current.up { border-left-color: var(--up); }
+.fact-current.down { border-left-color: var(--down); }
+.fact-current .fc-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-weight: 600; }
+.fact-current .fc-head .tag { font-weight: 400; }
+.fact-ic { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 8px; font-size: 13px; color: #4a5058; }
+.fact-ic b { font-variant-numeric: tabular-nums; }
+.fact-ic .pos { color: var(--up); }
+.fact-ic .neg { color: var(--down); }
+.fact-chart {
+  width: 100%;
+  height: 300px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.fact-bucket-chart {
+  width: 100%;
+  height: 220px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.fact-wrap .bt-table { margin-top: 0; }
+.fact-wrap tr.fact-cur-row td { background: #fff7e6; font-weight: 600; }
+

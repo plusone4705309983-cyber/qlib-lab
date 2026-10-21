@@ -148,6 +148,44 @@ def test_vwap():
     check("vwap/close ∈ [0.5,1.5]", weird == 0, f"异常 {weird} 行")
 
 
+def test_factor():
+    print("[6] 因子实验室 /api/factor")
+    import factor_eval
+    bad_cases = ["__import__('os')", "Foo($close,5)", "$bad+1", "'x'", "a[0]"]
+    ok_bad = 0
+    for bad in bad_cases:
+        try:
+            factor_eval.validate(bad)
+        except factor_eval.ExprError:
+            ok_bad += 1
+    check("非法表达式全部拦截", ok_bad == len(bad_cases), f"{ok_bad}/{len(bad_cases)}")
+    check("合法表达式通过校验",
+          factor_eval.validate("Mean($close,5)/Mean($close,20)") == "Mean($close,5)/Mean($close,20)")
+    check("科学计数法通过校验",
+          factor_eval.validate("($close-Mean($close,20))/(Std($close,20)+1e-9)") != "")
+
+    from web import app as webapp
+    c = webapp.app.test_client()
+    r = c.get("/api/factor?market=cn&symbol=sh600519&expr=Mean($close,5)/Mean($close,20)")
+    check("/api/factor 200", r.status_code == 200, str(r.get_json())[:120] if r.status_code != 200 else "")
+    d = r.get_json()
+    check("factor 结构完整",
+          all(k in d for k in ("dates", "factor", "pct", "close_real", "ic", "buckets", "overall", "current")))
+    check("factor 序列等长",
+          len(d["factor"]) == len(d["pct"]) == len(d["close_real"]) == len(d["dates"]) > 1000, f"n={d.get('count')}")
+    ic10 = d["ic"]["10"]["ic"]
+    check("10日 IC 在 [-1,1]", ic10 is not None and -1.0 <= ic10 <= 1.0, str(ic10))
+    check("5 组均非空", len(d["buckets"]) == 5 and all(b["n"] > 50 for b in d["buckets"]),
+          str([b["n"] for b in d["buckets"]]))
+    check("当前读数含结论",
+          bool(d["current"]) and d["current"]["level"] in ("info", "warn", "neutral") and bool(d["current"]["msg"]))
+    check("分位前 249 天留空 (无未来函数)", d["pct"][:249] == [None] * 249)
+    check("/api/factor 非法表达式 400",
+          c.get("/api/factor?market=cn&symbol=sh600519&expr=Foo($close,5)").status_code == 400)
+    check("/api/factor 未知标的 404",
+          c.get("/api/factor?market=cn&symbol=zzz9999&expr=$close").status_code == 404)
+
+
 if __name__ == "__main__":
     test_config_and_csv()
     test_payload_signals()
@@ -155,5 +193,6 @@ if __name__ == "__main__":
     test_indicators()
     test_holders()
     test_vwap()
+    test_factor()
     print(f"\n结果: {PASS} PASS / {FAIL} FAIL")
     sys.exit(1 if FAIL else 0)

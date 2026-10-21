@@ -91,11 +91,11 @@ qlib 的字段契约（官方文档 `component/data.rst` 对每个字段的定�
 
 传进去的字符串分两类：
 
-- **原始字段**（对应磁盘上的 `.bin`）：`$open $high $low $close $volume $factor`
+- **原始字段**（对应磁盘上的 `.bin`）：`$open $high $low $close $volume $factor $vwap`
 - **表达式**（qlib 的算子解析器现场算，不落盘）：
   - 时序：`Ref(x, N)` `Mean(x, N)` `Sum/Std/Max/Min/Slope/Corr(x, N)` `Quantile(x, N)`
   - 逻辑：`If(c, a, b)` `Greater/Less`
-  - 截面：`Rank(x, N)` —— **必须显式给 N**
+  - `Rank(x, N)` 是**滚动分位**（当前值在过去 N 日中的百分位，0~1），不是截面排名
   - `列[1]` / `列[2]` 取的是**未来** 1/2 期，只能给 label 用，特征里用了就是前视偏差
 
 几个具体错误（都实际踩过）：
@@ -140,6 +140,48 @@ allmkt = pd.concat([df_cn, df_us], axis=0)
 
 `pyqlib==0.9.7` 有 `cp310-cp310-win_amd64.whl`，Windows 原生可用，不需要 WSL。
 和 `numpy 2.2.6` / `pandas 2.3.3` 兼容，import 无警告。
+
+## 8. 表达式引擎：可用算子一览（qlib 0.9.7 实测）
+
+`qlib.data.ops` 注册的算子就是全集。「因子实验室」开放的是其中去掉复数参数
+（`TResample` / `Rolling` / `PairRolling` / `ChangeInstrument`）后的白名单：
+
+| 类别 | 算子 | 用法/说明 |
+|---|---|---|
+| 时序滚动 | `Ref Mean Std Var Med Min Max Sum Count Quantile Rank IdxMax IdxMin Slope Rsquare Resi EMA WMA Mad Kurt Skew Corr Cov` | `Op(x, N)`；`Rank` 返回 0~1 分位；`Slope/Rsquare/Resi` 是滚动线性回归 |
+| 逐元素 | `Abs Log Sign Delta Power` | `Delta(x,N) = x - Ref(x,N)` |
+| 条件 | `If(c, a, b)` `Mask(x, cond)` | |
+| 比较 | `Gt Ge Lt Le Eq Ne Greater Less` | 返回 0/1 |
+| 逻辑 | `And Or Not` | |
+| 算术 | `Add Sub Mul Div` | 也可以直接写 `+ - * /` |
+| 特征 | `$open $high $low $close $volume $factor $vwap` | 磁盘上的 7 个 `.bin` 字段 |
+
+注意：
+
+- 不能传字符串参数（`TResample` 的频率、`ChangeInstrument` 的 instrument 名），白名单里直接没开。
+- `Ref(x, -N)` 会取到**未来** N 期（qlib 允许负数）。构造 label 时有用，当特征用就是前视偏差。
+- qlib 内部对表达式是 `eval(parse_field(...))`（`qlib/data/data.py`），因此 web 端必须
+  先做白名单校验，绝不能把用户输入原样丢进去 —— 见 `web/factor_eval.py` 的 `validate()`。
+
+### 因子实验室（Web 页）
+
+链路：`GET /api/factor` → `web/factorlab.py`（分析 + 进程内缓存）→ 子进程
+`web/factor_eval.py`（白名单校验 + `D.features` 求值）。
+
+- **分组**：因子再套一层 `Rank(因子, 250)`，按滚动分位切 5 组；前 249 天窗口不满直接留空
+  —— 没有未来函数。
+- **指标**：未来 5/10/20 日收益（真实价口径）、上涨概率、样本数、全样本 Spearman IC。
+- **当前读数**：最新因子值的历史分位 → 落在哪一组 → 该组历史表现 → 看多/看空/中性。
+
+实测（`SH600519`，6011 个交易日）：
+
+| 因子 | IC(5日) | IC(10日) | IC(20日) |
+|---|---|---|---|
+| `Mean($close,5)/Mean($close,20)` | 0.036 | 0.081 | 0.073 |
+| `($vwap-$close)/$close` | 0.029 | 0.033 | 0.010 |
+| `Corr($close,$volume,20)` | 0.000 | 0.025 | 0.054 |
+
+（IC 是样本内的描述性统计，不等于策略收益；单票 6000 天量级下 |IC| ≥ 0.03 已值得继续研究。）
 
 ---
 

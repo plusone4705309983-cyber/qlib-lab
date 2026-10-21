@@ -67,6 +67,28 @@ def api_indicators():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.get("/api/factor")
+def api_factor():
+    """因子实验室: 自定义 Qlib 表达式 -> 分位/IC/前向收益/当前读数。"""
+    market = request.args.get("market", "cn")
+    symbol = request.args.get("symbol", "").lower()
+    expr = (request.args.get("expr") or "").strip()
+    if view.find(market, symbol) is None:
+        return jsonify({"error": f"未配置的标的: {market}/{symbol}"}), 404
+    if not expr:
+        return jsonify({"error": "缺少 expr 参数"}), 400
+    try:
+        import factorlab
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"因子模块不可用: {exc}"}), 500
+    try:
+        return jsonify(factorlab.compute(market, symbol, expr))
+    except factorlab.factor_eval.ExprError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.get("/api/check_bin")
 def api_check_bin():
     market = request.args.get("market", "cn")

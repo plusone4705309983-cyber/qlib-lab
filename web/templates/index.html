@@ -88,6 +88,41 @@
       <div id="hold-detail" class="hold-detail"></div>
     </div>
 
+    <div class="fact-wrap" id="fact-wrap">
+      <div class="side-title">
+        因子实验室 <span class="muted">自定义 Qlib 表达式 → 分组 / IC / 前向收益 / 当前读数</span>
+      </div>
+      <div class="fact-bar">
+        <select id="fact-preset" class="mini" title="预置因子">
+          <option value="">预置…</option>
+          <option value="Mean($close,5)/Mean($close,20)">均线比 MA5/MA20</option>
+          <option value="($close-Mean($close,20))/(Std($close,20)+1e-9)">布林位置 Z 值</option>
+          <option value="Rank($close,250)">250 日价格分位</option>
+          <option value="Mean($volume,5)/Mean($volume,20)">量能比 V5/V20</option>
+          <option value="Corr($close,$volume,20)">价量相关 Corr20</option>
+          <option value="($vwap-$close)/$close">VWAP 偏离</option>
+          <option value="$close/Ref($close,20)-1">20 日动量</option>
+          <option value="Std($close,20)/Mean($close,20)">波动率 CV20</option>
+        </select>
+        <input id="fact-expr" class="fact-expr" spellcheck="false"
+               placeholder="例: Mean($close,5)/Mean($close,20)">
+        <button id="fact-run" class="btn btn-primary">计算</button>
+      </div>
+      <div class="fact-hint">
+        字段：$open $high $low $close $volume $factor $vwap（均为后复权）
+        · 算子：Ref Mean Std Slope Rsquare Resi Rank Quantile Corr If Abs Log …
+        · 前向收益按<strong>真实价</strong>计算（与信号回测同口径）
+        · 分组 = 过去 250 日滚动分位，无未来函数
+        · <strong>Ref(x,N) 的 N 为负数会取到未来数据</strong>（只用于构造 label，别当特征）
+      </div>
+      <div id="fact-status" class="muted"></div>
+      <div id="fact-current" class="fact-current" style="display:none"></div>
+      <div id="fact-ic" class="fact-ic"></div>
+      <div id="fact-chart" class="fact-chart"></div>
+      <div id="fact-bucket-chart" class="fact-bucket-chart"></div>
+      <div id="fact-table" class="bt-table"></div>
+    </div>
+
     <div class="legend">
       <span><i class="dot dot-error"></i> 错误 (因子下调 / OHLC 越界)</span>
       <span><i class="dot dot-info"></i> 提示 (异动 / 缺失日 / 未复权拆股)</span>
