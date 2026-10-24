@@ -61,6 +61,8 @@ def reload() -> None:
         _common.CFG = yaml.safe_load(fh)
     _cal_cache.clear()
     _ind_cache.clear()
+    global _catalog_cache
+    _catalog_cache = None
 
 
 def symbols() -> list[dict]:
@@ -118,6 +120,7 @@ def load_rows(market: str, qlib: str) -> list[dict]:
 
 _cal_cache: dict[str, list[str]] = {}
 _ind_cache: dict = {}
+_catalog_cache: list[dict] | None = None
 
 
 def market_calendar(market: str) -> list[str]:
@@ -135,11 +138,9 @@ def market_calendar(market: str) -> list[str]:
 
 # --- 技术指标 -------------------------------------------------------------
 def compute_indicators(market: str, qlib: str, mode: str = "real") -> dict:
-    """用 qlib 表达式引擎计算常用指标 (子进程隔离, 带内存缓存)。
+    """用 qlib 表达式引擎计算常用指标 (主进程单例缓存, 带内存缓存)。
 
     mode: real = 真实成交价口径,  hfq = 后复权价口径。
-    返回 {dates, node, series:{ma5..atr14}}; 全部指标在脚本里用 D.features
-    一次算完, 结果缓存, 切换指标只在前端切换显示, 无需再次请求。
     """
     qlib = qlib.lower()
     if mode not in ("real", "hfq"):
@@ -148,22 +149,29 @@ def compute_indicators(market: str, qlib: str, mode: str = "real") -> dict:
     hit = _ind_cache.get(key)
     if hit is not None:
         return hit
-    proc = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve().parent / "indicators.py"), market, qlib, mode],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=180,
-    )
-    if proc.returncode != 0:
-        msg = (proc.stderr or proc.stdout or "指标计算失败").strip().splitlines()
-        raise RuntimeError(msg[-1] if msg else "指标计算失败")
-    lines = [x for x in proc.stdout.splitlines() if x.strip().startswith("{")]
-    if not lines:
-        raise RuntimeError("指标计算无输出")
-    result = json.loads(lines[-1])
-    _ind_cache[key] = result
-    return result
+    try:
+        from web import indicators
+
+        result = indicators.compute_series(market, qlib, mode)
+        _ind_cache[key] = result
+        return result
+    except Exception:
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent / "indicators.py"), market, qlib, mode],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=180,
+        )
+        if proc.returncode != 0:
+            msg = (proc.stderr or proc.stdout or "指标计算失败").strip().splitlines()
+            raise RuntimeError(msg[-1] if msg else "指标计算失败")
+        lines = [x for x in proc.stdout.splitlines() if x.strip().startswith("{")]
+        if not lines:
+            raise RuntimeError("指标计算无输出")
+        result = json.loads(lines[-1])
+        _ind_cache[key] = result
+        return result
 
 
 # --- 检测 -----------------------------------------------------------------
@@ -303,22 +311,24 @@ def payload(market: str, qlib: str, include_signals: bool = True) -> dict:
             "symbol": qlib,
             "name": meta["name"],
             "currency": CURRENCY.get(market, ""),
+            "secid": meta.get("secid", ""),
+            "tencent": meta.get("tencent", ""),
         },
         "dates": [r["date"] for r in rows],
         "hfq": {
-            "open": arr("open", _price_round),
-            "high": arr("high", _price_round),
-            "low": arr("low", _price_round),
-            "close": arr("close", _price_round),
+            "open": [round(r["open"], 3) for r in rows],
+            "high": [round(r["high"], 3) for r in rows],
+            "low": [round(r["low"], 3) for r in rows],
+            "close": [round(r["close"], 3) for r in rows],
         },
         "real": {
-            "open": [round(r["open"] / r["factor"], _price_round) for r in rows],
-            "high": [round(r["high"] / r["factor"], _price_round) for r in rows],
-            "low": [round(r["low"] / r["factor"], _price_round) for r in rows],
-            "close": [round(r["close"] / r["factor"], _price_round) for r in rows],
+            "open": [round(r["open"] / r["factor"], 3) for r in rows],
+            "high": [round(r["high"] / r["factor"], 3) for r in rows],
+            "low": [round(r["low"] / r["factor"], 3) for r in rows],
+            "close": [round(r["close"] / r["factor"], 3) for r in rows],
         },
         "volume": [int(r["volume"]) for r in rows],
-        "factor": arr("factor", _factor_round),
+        "factor": [round(r["factor"], 6) for r in rows],
         "anomalies": anomalies,
         "signal_backtest": signal_backtest,
         "signal_labels": signal_labels,
@@ -329,6 +339,9 @@ def payload(market: str, qlib: str, include_signals: bool = True) -> dict:
 
 def catalog() -> list[dict]:
     """给前端的股票清单: 每只带起止/行数/异常计数。"""
+    global _catalog_cache
+    if _catalog_cache is not None:
+        return _catalog_cache
     out = []
     for s in symbols():
         rows = load_rows(s["market"], s["qlib"])
@@ -345,6 +358,7 @@ def catalog() -> list[dict]:
                 "anomaly_counts": counts,
             }
         )
+    _catalog_cache = out
     return out
 
 

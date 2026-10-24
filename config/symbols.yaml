@@ -30,3 +30,6 @@ markets:
     - {qlib: nvda, secid: "105.NVDA", tencent: usNVDA.OQ, name: "英伟达"}
     - {qlib: msft, secid: "105.MSFT", tencent: usMSFT.OQ, name: "微软"}
     - {qlib: spcx, secid: 105.SPCX, tencent: usSPCX.OQ, name: SpaceX}
+    - {qlib: aehg, secid: 107.AEHG, tencent: usAEHG.A, name: 二倍做多AEHR 
+        ETF-Leverage}
+    - {qlib: axtx, secid: 107.AXTX, tencent: usAXTX.A, name: 二倍做多AXTI ETF-Tradr}

@@ -54,7 +54,16 @@
     </div>
 
     <div id="summary" class="summary"></div>
-    <div id="chart" class="chart"></div>
+    <div class="chart-wrap">
+      <div id="chart" class="chart"></div>
+      <div id="chart-loading" class="chart-loading" aria-live="polite">
+        <div class="chart-loading-inner">
+          <span class="chart-spinner"></span>
+          <span class="chart-loading-text">加载中…</span>
+        </div>
+      </div>
+    </div>
+    <div id="chart-resizer" class="chart-resizer" title="拖动调整图表高度 (双击恢复默认)"></div>
     <div id="bin-result" class="bin-result"></div>
 
     <div class="anom-wrap">

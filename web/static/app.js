@@ -119,30 +119,54 @@ async function ensureIndicators() {
   }
 }
 
+let selectToken = 0;
+function showChartLoading(show) {
+  const el = $("chart-loading");
+  if (!el) return;
+  if (show) el.classList.add("show");
+  else el.classList.remove("show");
+}
 async function selectSymbol(market, symbol) {
+  const token = ++selectToken;
   state.market = market;
   state.symbol = symbol;
   markActive();
   if (MQ_NARROW.matches) $("sidebar").classList.add("collapsed");
   $("bin-result").innerHTML = "";
   clearFactor("已切换标的，点『计算』重新分析");
-  const res = await fetch(`/api/kline?market=${market}&symbol=${symbol}`);
-  const data = await res.json();
-  if (state.market !== market || state.symbol !== symbol) return;
-  if (data.error) {
-    $("summary").textContent = data.error;
-    return;
+  showChartLoading(true);
+  $("chart").setAttribute("aria-busy", "true");
+  if (state.chart) {
+    try { state.chart.clear(); } catch (_) {}
   }
-  state.payload = data;
-  state.indData = null;
-  $("cur-name").textContent = data.meta.name;
-  $("cur-code").textContent = `${data.meta.market_label} · ${data.meta.symbol.toUpperCase()} · ${data.meta.currency}`;
-  renderSummary(data);
-  renderAnomalies(data);
-  renderBacktest(data);
-  renderHolders(data);
-  await ensureIndicators();
-  if (state.market === market && state.symbol === symbol) renderChart(data);
+  $("summary").innerHTML = "加载中…";
+  $("cur-name").textContent = "加载中…";
+  $("cur-code").textContent = `${market.toUpperCase()} · ${symbol.toUpperCase()}`;
+  try {
+    const res = await fetch(`/api/kline?market=${market}&symbol=${symbol}`);
+    const data = await res.json();
+    if (token !== selectToken) return;
+    if (state.market !== market || state.symbol !== symbol) return;
+    if (data.error) {
+      $("summary").textContent = data.error;
+      return;
+    }
+    state.payload = data;
+    state.indData = null;
+    $("cur-name").textContent = data.meta.name;
+    $("cur-code").textContent = `${data.meta.market_label} · ${data.meta.symbol.toUpperCase()} · ${data.meta.currency} · secid ${data.meta.secid || "—"}`;
+    renderSummary(data);
+    renderAnomalies(data);
+    renderBacktest(data);
+    renderHolders(data);
+    await ensureIndicators();
+    if (state.market === market && state.symbol === symbol) renderChart(data);
+  } finally {
+    if (token === selectToken) {
+      showChartLoading(false);
+      $("chart").removeAttribute("aria-busy");
+    }
+  }
 }
 
 function renderSummary(p) {
@@ -988,6 +1012,46 @@ const sidebarEl = $("sidebar");
     dragging = false;
     resizer.classList.remove("dragging");
     localStorage.setItem("sidebarW", String(Math.round(sidebarEl.getBoundingClientRect().width)));
+  });
+})();
+
+// 图表高度可拖动 + 本地记忆 (双击恢复默认)
+(function initChartResizer() {
+  const chartEl = $("chart");
+  const grip = $("chart-resizer");
+  const saved = parseInt(localStorage.getItem("chartH") || "", 10);
+  if (saved >= 200 && saved <= 3000) chartEl.style.height = saved + "px";
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+  const applyH = (h) => {
+    const max = Math.max(360, Math.round(window.innerHeight * 3));
+    const v = Math.max(200, Math.min(max, h));
+    chartEl.style.height = Math.round(v) + "px";
+    if (state.chart) state.chart.resize();
+  };
+  grip.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    startY = e.clientY;
+    startH = chartEl.getBoundingClientRect().height;
+    grip.classList.add("dragging");
+    try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault();
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    applyH(startH + (e.clientY - startY));
+  });
+  window.addEventListener("pointerup", () => {
+    if (!dragging) return;
+    dragging = false;
+    grip.classList.remove("dragging");
+    localStorage.setItem("chartH", String(Math.round(chartEl.getBoundingClientRect().height)));
+  });
+  grip.addEventListener("dblclick", () => {
+    chartEl.style.height = "";
+    localStorage.removeItem("chartH");
+    if (state.chart) state.chart.resize();
   });
 })();
 
