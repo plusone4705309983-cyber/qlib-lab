@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#ffffff">
 <meta name="format-detection" content="telephone=no">
 <title>Qlib 数据检视器</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=20261026a">
 </head>
 <body>
 <header>
@@ -124,7 +124,10 @@
         · 分组 = 过去 250 日滚动分位，无未来函数
         · <strong>Ref(x,N) 的 N 为负数会取到未来数据</strong>（只用于构造 label，别当特征）
       </div>
-      <div id="fact-status" class="muted"></div>
+      <div id="fact-status" class="fact-status muted" aria-live="polite">
+        <span id="fact-spinner" class="chart-spinner" hidden></span>
+        <span id="fact-status-text"></span>
+      </div>
       <div id="fact-current" class="fact-current" style="display:none"></div>
       <div id="fact-ic" class="fact-ic"></div>
       <div id="fact-chart" class="fact-chart"></div>
@@ -174,6 +177,6 @@
 </div>
 
 <script src="/static/vendor/echarts.min.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=20261026a"></script>
 </body>
 </html>

@@ -701,7 +701,16 @@ const signedPct = (v, nd = 2) => (v === null || v === undefined ? "—" : `${v >
 const plainPct = (v, nd = 2) => (v === null || v === undefined ? "—" : `${(v * 100).toFixed(nd)}%`);
 
 function factStatus(msg) {
-  $("fact-status").textContent = msg || "";
+  $("fact-status-text").textContent = msg || "";
+}
+
+function factBusy(on) {
+  $("fact-spinner").hidden = !on;
+  $("fact-run").disabled = on;
+  const box = $("fact-status");
+  box.classList.toggle("busy", on);
+  if (on) box.setAttribute("aria-busy", "true");
+  else box.removeAttribute("aria-busy");
 }
 
 function clearFactor(msg) {
@@ -725,8 +734,8 @@ async function runFactor() {
   const market = state.market;
   const symbol = state.symbol;
   factState.busy = true;
-  $("fact-run").disabled = true;
-  factStatus("计算中… 首次会启动 qlib 子进程，约 5~15 秒");
+  factBusy(true);
+  factStatus("计算中… 新表达式需启动 qlib，约 20~60 秒；相同表达式会缓存（约 0.2 秒）");
   try {
     const url = `/api/factor?market=${market}&symbol=${symbol}&expr=${encodeURIComponent(expr)}`;
     const res = await fetch(url);
@@ -743,7 +752,7 @@ async function runFactor() {
     factStatus(`请求失败：${e}`);
   } finally {
     factState.busy = false;
-    $("fact-run").disabled = false;
+    factBusy(false);
   }
 }
 

@@ -434,6 +434,8 @@ body.nav-collapsed .resizer { display: none; }
 
 /* ------------------------------------------------------------ 因子实验室 */
 .fact-wrap { margin-top: 18px; }
+.fact-status { display: flex; align-items: center; gap: 8px; min-height: 20px; }
+.fact-status .chart-spinner { width: 14px; height: 14px; flex: 0 0 auto; }
 .fact-wrap .side-title { font-weight: 600; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .fact-wrap .side-title .muted { font-weight: 400; font-size: 12px; }
 .fact-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 6px; }
