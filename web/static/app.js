@@ -716,6 +716,8 @@ function factBusy(on) {
 function clearFactor(msg) {
   factState.data = null;
   factStatus(msg || "");
+  $("fact-signal").style.display = "none";
+  $("fact-signal").innerHTML = "";
   $("fact-current").style.display = "none";
   $("fact-current").innerHTML = "";
   $("fact-ic").innerHTML = "";
@@ -735,7 +737,7 @@ async function runFactor() {
   const symbol = state.symbol;
   factState.busy = true;
   factBusy(true);
-  factStatus("计算中… 新表达式需启动 qlib，约 20~60 秒；相同表达式会缓存（约 0.2 秒）");
+  factStatus("计算中… 本市场首次需启动 qlib（约 20~60 秒），之后新表达式约 1 秒");
   try {
     const url = `/api/factor?market=${market}&symbol=${symbol}&expr=${encodeURIComponent(expr)}`;
     const res = await fetch(url);
@@ -757,6 +759,7 @@ async function runFactor() {
 }
 
 function renderFactor(d) {
+  renderFactSignal(d);
   renderFactCurrent(d);
   renderFactIC(d);
   renderFactTable(d);
@@ -764,16 +767,53 @@ function renderFactor(d) {
   renderFactBucketChart(d);
 }
 
+function renderFactSignal(d) {
+  const box = $("fact-signal");
+  const s = d.signal;
+  if (!s) { box.style.display = "none"; box.innerHTML = ""; return; }
+  const cls = s.level === "bullish" ? "bullish" : s.level === "bearish" ? "bearish" : "neutral";
+  const label = { bullish: "偏多", bearish: "偏空", neutral: "中性" }[s.level] || "中性";
+  const conf = { strong: "强置信", medium: "中等置信", weak: "弱置信" }[s.confidence] || "方向不明";
+  const st = s.stats || {};
+  const excessCls = st.excess > 0 ? "pos" : st.excess < 0 ? "neg" : "";
+  const avgCls = st.avg_ret > 0 ? "pos" : st.avg_ret < 0 ? "neg" : "";
+  const stat = (name, value, klass = "") =>
+    `<div class="fs-stat"><span>${name}</span><b class="${klass}">${value}</b></div>`;
+  const range =
+    st.q10 === null || st.q10 === undefined ? "—" : `${signedPct(st.q10)} ~ ${signedPct(st.q90)}`;
+  const icTxt = s.ic === null || s.ic === undefined ? "—" : `${s.ic > 0 ? "+" : ""}${s.ic.toFixed(3)}`;
+  const reasons = (s.reasons || []).map((r) => `<li>${esc(r)}</li>`).join("");
+  box.className = `fact-signal ${cls}`;
+  box.innerHTML = `
+    <div class="fs-head">
+      <span class="fs-badge">${label}</span>
+      <span class="fs-conf">${conf}</span>
+      <span class="fs-meta">${esc(s.date)} · 分位 ${plainPct(s.pct, 1)} · ${esc(s.name)} · 因子 ${num3(s.factor)}</span>
+    </div>
+    <div class="fs-stats">
+      ${stat(`未来 ${s.horizon} 日均值`, signedPct(st.avg_ret), avgCls)}
+      ${stat("上涨概率", plainPct(st.win_rate, 0))}
+      ${stat("相对全样本超额", signedPct(st.excess), excessCls)}
+      ${stat("有效样本", `约 ${fmtInt(st.n_eff)}`)}
+      ${stat(`IC(${s.horizon}日)`, icTxt)}
+      ${stat("q10 ~ q90", range)}
+    </div>
+    <ul class="fs-reasons">${reasons}</ul>
+    <div class="fs-invalidate">失效条件：${esc(s.invalidate)}</div>
+    <div class="fs-note">${esc(s.disclaimer || "历史统计，不构成投资建议。")}</div>`;
+  box.style.display = "";
+}
+
 function renderFactCurrent(d) {
   const box = $("fact-current");
   const c = d.current;
   if (!c) { box.style.display = "none"; return; }
   const cls = c.level === "info" ? "up" : c.level === "warn" ? "down" : "";
-  const lvl = { info: ["看多", "signal"], warn: ["看空", "signal-warn"], neutral: ["中性", "info"] }[c.level] || ["中性", "info"];
+  const lvl = { info: ["偏多", "signal"], warn: ["偏空", "signal-warn"], neutral: ["中性", "info"] }[c.level] || ["中性", "info"];
   box.className = `fact-current ${cls}`;
   box.innerHTML = `
     <div class="fc-head">
-      <span>当前读数</span><span>${c.date}</span>
+      <span>原始读数</span><span>${c.date}</span>
       <span class="tag ${lvl[1]}">${lvl[0]}</span>
       <span class="muted">因子 ${num3(c.factor)} · 分位 ${plainPct(c.pct, 1)} · ${c.name}</span>
     </div>

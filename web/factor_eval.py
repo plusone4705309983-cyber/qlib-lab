@@ -1,9 +1,17 @@
-"""因子实验室 —— qlib 表达式求值 (子进程)。
+"""因子实验室 —— qlib 表达式求值 (子进程 / 常驻 worker)。
 
-由 app.py / factorlab.py 以子进程调用, 把 qlib 全局 init 隔离在主进程之外
-(与 indicators.py / bincheck.py 同一套路)。
+两种用法:
 
+    # 1) 一次性 CLI (调试用)
     python web/factor_eval.py cn sh600519 "Mean($close,5)/Mean($close,20)"
+
+    # 2) 常驻 worker (web 服务用, 由 factor_runtime.py 拉起)
+    python -u web/factor_eval.py --worker cn
+    # stdin 每行一个 JSON: {"id":1,"symbol":"sh600519","expr":"..."}
+    # stdout 每行一个 JSON: {"id":1,"ok":true,"data":{...}}
+
+常驻模式下 qlib 只 init 一次, 之后每个新表达式约 1 秒, 而不是每次 20~60 秒。
+qlib 仍在独立进程里, 崩溃/超时不会拖垮 Flask 主进程。
 
 安全: qlib 内部对表达式字符串直接 eval (qlib/data/data.py: eval(parse_field(...))),
 所以这里先做**白名单校验** —— 只允许注册过的算子名、只允许 7 个原始字段,
@@ -106,20 +114,17 @@ def _num(v, nd=6):
     return round(f, nd)
 
 
-def main() -> None:
-    if len(sys.argv) < 4:
-        print(json.dumps({"error": "用法: factor_eval.py <market> <symbol> <expr>"}, ensure_ascii=False))
-        sys.exit(2)
-    market, symbol, expr = sys.argv[1], sys.argv[2].lower(), sys.argv[3]
-    try:
-        expr = validate(expr)
-    except ExprError as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
-        sys.exit(2)
+def evaluate(market: str, symbol: str, expr: str, init: bool = True) -> dict:
+    """求值一个表达式, 返回统一 JSON 结构。
 
-    import _common
+    init=False 供常驻 worker 使用 (qlib 已在进程内初始化)。
+    """
+    expr = validate(expr)
+    if init:
+        import _common
 
-    _common.launch(market)
+        _common.launch(market)
+
     from qlib.data import D
 
     sym = symbol.upper()
@@ -131,8 +136,7 @@ def main() -> None:
     df = D.features([sym], fields, freq="day")
     df = df[df["$close"].notna()]  # 仅保留实际交易日
     if df.empty:
-        print(json.dumps({"error": f"{sym} 无可用数据"}, ensure_ascii=False))
-        sys.exit(3)
+        raise RuntimeError(f"{sym} 无可用数据")
 
     col_ix = {name: i for i, name in enumerate(fields)}
     factor_vals = df.iloc[:, 0].tolist()
@@ -146,21 +150,74 @@ def main() -> None:
         c, f = _num(c), _num(f)
         close_real.append(None if c is None or not f else round(c / f, 6))
 
-    print(
-        json.dumps(
-            {
-                "market": market,
-                "symbol": symbol,
-                "expr": expr,
-                "hist_win": HIST_WIN,
-                "dates": dates,
-                "factor": [_num(v) for v in factor_vals],
-                "pct": [_num(v, 6) for v in pct_vals],
-                "close_real": close_real,
-            },
-            ensure_ascii=False,
-        )
-    )
+    return {
+        "market": market,
+        "symbol": symbol,
+        "expr": expr,
+        "hist_win": HIST_WIN,
+        "dates": dates,
+        "factor": [_num(v) for v in factor_vals],
+        "pct": [_num(v, 6) for v in pct_vals],
+        "close_real": close_real,
+    }
+
+
+def worker_main(market: str) -> None:
+    """常驻 worker: 初始化一次 qlib, 然后按行处理 JSON 请求。"""
+    import traceback
+
+    try:
+        import _common
+
+        _common.launch(market)
+        from qlib.data import D  # noqa: F401  确认 qlib 可用
+
+        print(json.dumps({"ready": True, "market": market}, ensure_ascii=False), flush=True)
+    except Exception:
+        print(json.dumps({"ready": False, "error": traceback.format_exc()}, ensure_ascii=False), flush=True)
+        return
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        rid = None
+        try:
+            req = json.loads(line)
+            rid = req.get("id")
+            data = evaluate(
+                market,
+                str(req.get("symbol", "")).lower(),
+                req.get("expr", ""),
+                init=False,
+            )
+            out = {"id": rid, "ok": True, "data": data}
+        except Exception as exc:  # 包含 ExprError / qlib 报错
+            out = {"id": rid, "ok": False, "error": str(exc)}
+        try:
+            print(json.dumps(out, ensure_ascii=False), flush=True)
+        except Exception:
+            return
+
+
+def main() -> None:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--worker":
+        worker_main(sys.argv[2].lower())
+        return
+
+    if len(sys.argv) < 4:
+        print(json.dumps({"error": "用法: factor_eval.py <market> <symbol> <expr>"}, ensure_ascii=False))
+        sys.exit(2)
+    market, symbol, expr = sys.argv[1], sys.argv[2].lower(), sys.argv[3]
+    try:
+        data = evaluate(market, symbol, expr)
+    except ExprError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        sys.exit(2)
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        sys.exit(1)
+    print(json.dumps(data, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -453,6 +453,67 @@ body.nav-collapsed .resizer { display: none; }
 .fact-expr:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12); }
 .fact-hint { font-size: 12px; color: var(--muted); line-height: 1.7; margin-bottom: 8px; }
 .fact-hint strong { color: #4a5058; font-weight: 600; }
+.fact-signal {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--info);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+.fact-signal.bullish { border-left-color: var(--up); }
+.fact-signal.bearish { border-left-color: var(--down); }
+.fact-signal.neutral { border-left-color: var(--info); }
+.fs-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fs-badge {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: var(--info);
+}
+.fact-signal.bullish .fs-badge { background: var(--up); }
+.fact-signal.bearish .fs-badge { background: var(--down); }
+.fs-conf {
+  font-size: 12px;
+  color: #4a5058;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.fs-meta { font-size: 12px; color: var(--muted); }
+.fs-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+.fs-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.fs-stat span { font-size: 11px; color: var(--muted); }
+.fs-stat b { font-size: 14px; font-variant-numeric: tabular-nums; }
+.fs-stat b.pos { color: var(--up); }
+.fs-stat b.neg { color: var(--down); }
+.fs-reasons { margin: 6px 0; padding-left: 18px; font-size: 12.5px; line-height: 1.7; color: #374151; }
+.fs-reasons li { margin: 2px 0; }
+.fs-invalidate {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #8a5a00;
+  background: #fff8e6;
+  border: 1px solid #f0d9a8;
+  border-radius: 6px;
+  padding: 6px 9px;
+}
+.fs-note { font-size: 11px; color: var(--muted); margin-top: 6px; }
 .fact-current {
   border: 1px solid var(--line);
   border-left: 4px solid var(--info);

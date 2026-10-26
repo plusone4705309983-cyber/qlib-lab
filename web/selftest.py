@@ -180,7 +180,66 @@ def test_factor():
           str([b["n"] for b in d["buckets"]]))
     check("当前读数含结论",
           bool(d["current"]) and d["current"]["level"] in ("info", "warn", "neutral") and bool(d["current"]["msg"]))
+    sig = d.get("signal")
+    check("信号卡存在", bool(sig))
+    if sig:
+        check("信号卡方向合法", sig["level"] in ("bullish", "bearish", "neutral"), str(sig.get("level")))
+        check("信号卡置信度合法", sig["confidence"] in (None, "strong", "medium", "weak"),
+              str(sig.get("confidence")))
+        check("信号卡统计完整",
+              all(k in sig["stats"] for k in ("avg_ret", "win_rate", "n_eff", "excess", "q10", "q50", "q90")))
+        check("信号卡含理由与失效条件",
+              len(sig["reasons"]) >= 2 and bool(sig["invalidate"]))
+        check("有效样本按重叠折算", 0 < sig["stats"]["n_eff"] <= sig["stats"]["n"])
+    check("分组含 q10/q50/q90",
+          all(all(k in b["h"]["10"] for k in ("q10", "q50", "q90")) for b in d["buckets"]))
+    check("分位数有序",
+          all(b["h"]["10"]["q10"] <= b["h"]["10"]["q50"] <= b["h"]["10"]["q90"]
+              for b in d["buckets"] if b["h"]["10"]["q10"] is not None))
     check("分位前 249 天留空 (无未来函数)", d["pct"][:249] == [None] * 249)
+
+    # ---- 信号卡纯函数: 不依赖 qlib, 覆盖偏多/偏空/中性 ----
+    import factorlab
+    hs = (5, 10, 20)
+    check("分位数插值", abs(factorlab._quantile([1, 2, 3, 4, 5], 0.5) - 3) < 1e-9)
+
+    def mk_cell(avg, win):
+        return {"n": 400, "avg_ret": avg, "win_rate": win, "q10": -0.05, "q50": 0.0, "q90": 0.05}
+
+    def mk_buckets():
+        return [{"i": g, "name": f"第{g + 1}组", "n": 400,
+                 "h": {str(h): mk_cell(0.0, 0.5) for h in hs}} for g in range(5)]
+
+    overall = {str(h): mk_cell(0.005, 0.52) for h in hs}
+    ic = {str(h): {"ic": 0.06, "n": 100} for h in hs}
+    n = 300
+    dates = [f"2026-01-{i % 28 + 1:02d}" for i in range(n)]
+    close_up = [10 + i * 0.05 for i in range(n)]
+    close_dn = [30 - i * 0.05 for i in range(n)]
+    factor = [1.0] * n
+    pct_low = [0.05] * n
+    pct_high = [0.95] * n
+
+    buckets = mk_buckets()
+    buckets[0]["h"] = {str(h): mk_cell(0.02, 0.6) for h in hs}
+    sig_b = factorlab._build_signal(dates, close_up, pct_low, factor, buckets, overall, ic)
+    check("合成偏多信号",
+          bool(sig_b) and sig_b["level"] == "bullish" and sig_b["confidence"] in ("strong", "medium"),
+          str(sig_b and (sig_b["level"], sig_b["confidence"], sig_b["score"])))
+
+    buckets = mk_buckets()
+    buckets[4]["h"] = {str(h): mk_cell(-0.02, 0.4) for h in hs}
+    sig_s = factorlab._build_signal(dates, close_dn, pct_high, factor, buckets, overall, ic)
+    check("合成偏空信号",
+          bool(sig_s) and sig_s["level"] == "bearish" and sig_s["confidence"] in ("strong", "medium"),
+          str(sig_s and (sig_s["level"], sig_s["confidence"], sig_s["score"])))
+
+    buckets_n = [{"i": g, "name": f"第{g + 1}组", "n": 400,
+                  "h": {str(h): mk_cell(0.005, 0.52) for h in hs}} for g in range(5)]
+    sig_n = factorlab._build_signal(dates, close_up, pct_low, factor, buckets_n, overall, ic)
+    check("合成中性信号", bool(sig_n) and sig_n["level"] == "neutral" and sig_n["confidence"] is None,
+          str(sig_n and (sig_n["level"], sig_n["confidence"])))
+
     check("/api/factor 非法表达式 400",
           c.get("/api/factor?market=cn&symbol=sh600519&expr=Foo($close,5)").status_code == 400)
     check("/api/factor 未知标的 404",

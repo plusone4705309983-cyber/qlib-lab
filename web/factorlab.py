@@ -5,15 +5,16 @@
     2. 分组(5 组, 按过去 250 日**滚动分位**, 无未来函数)的未来收益 / 上涨概率
     3. 全样本 Spearman IC (因子值 vs 未来 N 日收益)
     4. 当前读数: 最新因子值落在哪一组 -> 历史上该组的后续表现
+    5. 信号卡: 分位 + 该组条件收益 + IC + 均线趋势 -> 偏多/中性/偏空 + 置信度 + 失效条件
 
-qlib 求值放在子进程 (factor_eval.py), 这里只做统计, 方便自检与复用。
+qlib 求值放在常驻 worker 里 (factor_eval.py + factor_runtime.py), 这里只做统计,
+方便自检与复用; worker 崩溃/超时不会影响 Flask 主进程。
 """
 
 from __future__ import annotations
 
 import json
 import math
-import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -22,6 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import factor_eval  # noqa: E402  仅用 validate / ExprError (模块级不 import qlib)
+import factor_runtime  # noqa: E402  常驻 qlib worker
 
 HORIZONS = (5, 10, 20)  # 与 signals.py 的信号回测口径一致
 HIST_WIN = factor_eval.HIST_WIN  # 250 日滚动分位窗口
@@ -41,18 +43,7 @@ def _run(market: str, symbol: str, expr: str) -> dict:
     with _LOCK:
         if key in _CACHE:  # 等锁期间可能已被别的线程算好
             return _CACHE[key]
-        cmd = [sys.executable, "-u", str(HERE / "factor_eval.py"), market, symbol, expr]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=180)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("因子计算超时 (180s), 请缩小表达式窗口")
-        lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip().startswith("{")]
-        if not lines:
-            tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-            raise RuntimeError(tail[-1] if tail else "因子计算失败")
-        data = json.loads(lines[-1])
-        if "error" in data:
-            raise factor_eval.ExprError(data["error"])
+        data = factor_runtime.evaluate(market, symbol, expr)
         if len(_CACHE) >= _CACHE_MAX:  # 简单 FIFO, 防止内存无限增长
             _CACHE.pop(next(iter(_CACHE)))
         _CACHE[key] = data
@@ -92,12 +83,35 @@ def _spearman(xs, ys):
     return num / den if den else None
 
 
+def _quantile(vals, q):
+    """线性插值分位数 (q=0.1/0.5/0.9)。"""
+    if not vals:
+        return None
+    s = sorted(vals)
+    if len(s) == 1:
+        return s[0]
+    pos = (len(s) - 1) * q
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return s[lo]
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+
+
 def _cell(idxs, ret_h):
     rets = [ret_h[i] for i in idxs if ret_h[i] is not None]
     if not rets:
-        return {"n": 0, "avg_ret": None, "win_rate": None}
+        return {"n": 0, "avg_ret": None, "win_rate": None,
+                "q10": None, "q50": None, "q90": None}
     win = sum(1 for r in rets if r > 0) / len(rets)
-    return {"n": len(rets), "avg_ret": round(_avg(rets), 6), "win_rate": round(win, 4)}
+    return {
+        "n": len(rets),
+        "avg_ret": round(_avg(rets), 6),
+        "win_rate": round(win, 4),
+        "q10": round(_quantile(rets, 0.10), 6),
+        "q50": round(_quantile(rets, 0.50), 6),
+        "q90": round(_quantile(rets, 0.90), 6),
+    }
 
 
 def _pct_span(vals):
@@ -109,6 +123,201 @@ def _pct_span(vals):
 
 def _pct_text(x):
     return f"{x * 100:.1f}%"
+
+
+def _ma(vals, n):
+    if len(vals) < n:
+        return None
+    window = vals[-n:]
+    if any(v is None for v in window):
+        return None
+    return sum(window) / n
+
+
+def _build_signal(dates, close, pct, factor, buckets, overall, ic):
+    """把「当前分位 + 该组历史统计 + IC + 均线」压成一张可解释的信号卡。
+
+    只做规则化提示, 不预测涨跌; 置信度按有效样本/胜率优势/超额/IC/期限一致性打分。
+    """
+    last = next(
+        (i for i in range(len(pct) - 1, -1, -1) if pct[i] is not None and factor[i] is not None),
+        None,
+    )
+    if last is None:
+        return None
+
+    h = HEADLINE_H
+    g = min(GROUPS - 1, max(0, int(pct[last] * GROUPS)))
+    cell = buckets[g]["h"][str(h)]
+    base = overall[str(h)]
+    if (
+        not cell
+        or cell.get("avg_ret") is None
+        or cell.get("win_rate") is None
+        or not base
+        or base.get("avg_ret") is None
+    ):
+        return None
+
+    avg, win, n = cell["avg_ret"], cell["win_rate"], cell["n"]
+    base_avg = base["avg_ret"]
+    excess = avg - base_avg
+    n_eff = max(1, int(round(n / h))) if n else 0
+    win_edge = round(abs(win - 0.5), 4)
+    ic10 = (ic.get(str(h)) or {}).get("ic")
+
+    direction = 0
+    if abs(excess) >= 0.002 or win_edge >= 0.03:
+        if avg > 0 and win > 0.5 and excess > 0:
+            direction = 1
+        elif avg < 0 and win < 0.5 and excess < 0:
+            direction = -1
+
+    close_ok = [v for v in close if v is not None]
+    ma20 = _ma(close, 20)
+    ma60 = _ma(close, 60)
+    last_close = close[last] if last < len(close) else None
+    low20 = min(close_ok[-20:]) if len(close_ok) >= 20 else None
+    high20 = max(close_ok[-20:]) if len(close_ok) >= 20 else None
+
+    if last_close is None or ma20 is None or ma60 is None:
+        trend = "unknown"
+    elif last_close > ma20 and ma20 > ma60:
+        trend = "up"
+    elif last_close < ma20 and ma20 < ma60:
+        trend = "down"
+    else:
+        trend = "flat"
+
+    reasons = [
+        f"当前分位 {_pct_text(pct[last])}（{buckets[g]['name']}），因子值 {factor[last]:.4g}。",
+        f"该组未来 {h} 日：均值 {avg * 100:+.2f}%，胜率 {win * 100:.0f}%，"
+        f"相对全样本超额 {excess * 100:+.2f}%；有效样本约 {n_eff}"
+        f"（原始 n={n}，按 {h} 日重叠折算）。",
+    ]
+
+    same = 0
+    if direction == 0:
+        level, confidence, score = "neutral", None, 0
+        reasons.append("该分位的超额收益/胜率优势不明确，暂不给方向。")
+    else:
+        score = 0
+        if n_eff >= 50:
+            score += 2
+        elif n_eff >= 20:
+            score += 1
+        if win_edge >= 0.10:
+            score += 2
+        elif win_edge >= 0.05:
+            score += 1
+        if abs(excess) >= 0.03:
+            score += 2
+        elif abs(excess) >= 0.01:
+            score += 1
+        if ic10 is not None and ic10 * direction > 0:
+            if abs(ic10) >= 0.08:
+                score += 2
+            elif abs(ic10) >= 0.04:
+                score += 1
+        for hh in HORIZONS:
+            c = buckets[g]["h"][str(hh)]
+            b = overall[str(hh)]
+            if c.get("avg_ret") is not None and b.get("avg_ret") is not None:
+                if (c["avg_ret"] - b["avg_ret"]) * direction > 0:
+                    same += 1
+        if same >= 2:
+            score += 1
+        if direction > 0 and trend == "down":
+            score -= 1
+        elif direction < 0 and trend == "up":
+            score -= 1
+
+        if score >= 7:
+            level, confidence = ("bullish" if direction > 0 else "bearish"), "strong"
+        elif score >= 5:
+            level, confidence = ("bullish" if direction > 0 else "bearish"), "medium"
+        elif score >= 3:
+            level, confidence = ("bullish" if direction > 0 else "bearish"), "weak"
+        else:
+            level, confidence = "neutral", None
+            reasons.append("综合评分不足（样本/胜率/超额/IC 偏弱），降级为中性。")
+
+        if confidence and ic10 is not None:
+            if ic10 * direction > 0:
+                reasons.append(f"IC({h}日) = {ic10:+.3f}，与分组方向一致。")
+            else:
+                reasons.append(f"IC({h}日) = {ic10:+.3f}，与分组方向不一致，置信度下调。")
+        if confidence:
+            if same >= 2:
+                reasons.append("5/10/20 日中有 2 个以上期限方向一致。")
+            else:
+                reasons.append("不同期限方向不一致，稳定性偏弱。")
+            if n_eff < 15:
+                reasons.append("有效样本偏少，统计不确定性大。")
+
+    if trend == "up":
+        reasons.append(
+            f"趋势：收盘 {last_close:.4g} 高于 MA20 {ma20:.4g}、MA20 高于 MA60 {ma60:.4g}（上行）。"
+        )
+    elif trend == "down":
+        reasons.append(
+            f"趋势：收盘 {last_close:.4g} 低于 MA20 {ma20:.4g}、MA20 低于 MA60 {ma60:.4g}（下行）。"
+        )
+    elif trend == "flat":
+        reasons.append("趋势：均线交织，方向不明。")
+
+    if level == "bullish" and trend == "down":
+        reasons.append("注意：价格处于均线空头排列，偏多信号属于逆势。")
+    if level == "bearish" and trend == "up":
+        reasons.append("注意：价格处于均线多头排列，偏空信号属于逆势。")
+
+    if level == "bullish" and low20 is not None and last_close:
+        inv = (
+            f"若收盘跌破近 20 日低点 {low20:.4g}（约 {(low20 / last_close - 1) * 100:+.1f}%）"
+            f"或分位回到 50% 以上，偏多判断失效。"
+        )
+    elif level == "bearish" and high20 is not None and last_close:
+        inv = (
+            f"若收盘突破近 20 日高点 {high20:.4g}（约 {(high20 / last_close - 1) * 100:+.1f}%）"
+            f"或分位回到 50% 以下，偏空判断失效。"
+        )
+    else:
+        inv = "等待分位进入 ≤20% 或 ≥80% 的极端区间，且该组出现明确超额收益后再看方向。"
+
+    return {
+        "date": dates[last],
+        "horizon": h,
+        "group": g,
+        "name": buckets[g]["name"],
+        "pct": pct[last],
+        "factor": factor[last],
+        "level": level,
+        "confidence": confidence,
+        "score": score,
+        "stats": {
+            "avg_ret": avg,
+            "win_rate": win,
+            "n": n,
+            "n_eff": n_eff,
+            "excess": round(excess, 6),
+            "q10": cell.get("q10"),
+            "q50": cell.get("q50"),
+            "q90": cell.get("q90"),
+        },
+        "baseline": {"avg_ret": base_avg, "win_rate": base.get("win_rate")},
+        "ic": ic10,
+        "trend": {
+            "label": trend,
+            "close": last_close,
+            "ma20": ma20,
+            "ma60": ma60,
+            "low20": low20,
+            "high20": high20,
+        },
+        "reasons": reasons,
+        "invalidate": inv,
+        "disclaimer": "历史统计 + 规则判断，不构成投资建议。",
+    }
 
 
 def compute(market: str, symbol: str, expr: str) -> dict:
@@ -187,16 +396,20 @@ def compute(market: str, symbol: str, expr: str) -> dict:
         cells = buckets[g]["h"]
         head = cells[str(HEADLINE_H)]
         avg, win, cnt = head["avg_ret"], head["win_rate"], head["n"]
-        if avg is None or win is None:
+        base_avg = overall[str(HEADLINE_H)]["avg_ret"]
+        excess = None if avg is None or base_avg is None else avg - base_avg
+        if avg is None or win is None or excess is None:
             level = "neutral"
-        elif avg > 0 and win >= 0.5:
+        elif avg > 0 and win >= 0.5 and excess > 0:
             level = "info"
-        elif avg < 0 and win < 0.5:
+        elif avg < 0 and win < 0.5 and excess < 0:
             level = "warn"
         else:
             level = "neutral"
 
         parts = [f"当前因子 {factor[last]:.4g}, 处于过去 {HIST_WIN} 日分位 {_pct_text(pct[last])}（{buckets[g]['name']}）。"]
+        if excess is not None:
+            parts.append(f"该组未来 {HEADLINE_H} 日相对全样本超额 {excess * 100:+.2f}%。")
         for h in HORIZONS:
             c = cells[str(h)]
             if c["avg_ret"] is not None:
@@ -222,6 +435,8 @@ def compute(market: str, symbol: str, expr: str) -> dict:
             "msg": "".join(parts),
         }
 
+    signal = _build_signal(dates, close, pct, factor, buckets, overall, ic)
+
     return {
         "market": market,
         "symbol": symbol,
@@ -238,6 +453,7 @@ def compute(market: str, symbol: str, expr: str) -> dict:
         "buckets": buckets,
         "overall": overall,
         "current": cur,
+        "signal": signal,
         "note": note,
     }
 
