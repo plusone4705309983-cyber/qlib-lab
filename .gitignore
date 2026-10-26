@@ -75,6 +75,9 @@ credentials.json
 secrets.yaml
 id_rsa*
 
+# ---- 个人隐私数据 (持仓账本等, 只存本机) ----
+data/private/
+
 # ---- opencode 本地文件 ----
 # 会话 ID, 指向本机会话存储, 对外无意义
 opencode_link.txt

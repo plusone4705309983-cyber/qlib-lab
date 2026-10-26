@@ -244,6 +244,151 @@ def test_factor():
           c.get("/api/factor?market=cn&symbol=sh600519&expr=Foo($close,5)").status_code == 400)
     check("/api/factor 未知标的 404",
           c.get("/api/factor?market=cn&symbol=zzz9999&expr=$close").status_code == 404)
+    cached = factorlab.cached("cn", "sh600519", "Mean($close,5)/Mean($close,20)")
+    check("compute 结果缓存含完整 signal", bool(cached and cached.get("signal")),
+          "cached 只有原始序列会导致持仓页把信号误判为样本不足")
+
+
+def test_portfolio():
+    print("[7] 持仓账本 / 成本 / 风控提醒")
+    import tempfile
+    from datetime import date, timedelta
+
+    import portfolio
+
+    tmp = Path(tempfile.mkdtemp(prefix="qlib-pos-selftest-"))
+    old_dir, old_file = portfolio.PRIVATE_DIR, portfolio.POS_FILE
+    portfolio.PRIVATE_DIR, portfolio.POS_FILE = tmp, tmp / "positions.json"
+    try:
+        d = portfolio.list_positions()
+        check("空账本", d["positions"] == [] and d["summary"]["count"] == 0)
+
+        d = portfolio.add_lot({
+            "market": "cn", "symbol": "sh600519", "date": "2026-09-01",
+            "price": 100, "qty": 100, "fee": 10,
+        })
+        p = d["positions"][0]
+        check("新增买入", len(p["lots"]) == 1 and p["qty"] == 100)
+        check("成本含手续费", p["cost"] == 10010.0 and abs(p["avg_cost"] - 100.1) < 1e-9,
+              f"cost={p.get('cost')} avg={p.get('avg_cost')}")
+        check("买入日期已填充", p["last_date"] is not None)
+        check("持仓文件已落盘", portfolio.POS_FILE.exists())
+        before = portfolio.POS_FILE.read_text(encoding="utf-8")
+        portfolio.add_lot({
+            "market": "cn", "symbol": "sh600519", "date": "2026-09-10",
+            "price": 110, "qty": 50,
+        })
+        check("同标的追加 lot", len(portfolio.list_positions()["positions"][0]["lots"]) == 2)
+        check(".bak 备份存在", portfolio.POS_FILE.with_name("positions.json.bak").exists())
+        check("原子写未留 .tmp", not portfolio.POS_FILE.with_name("positions.json.tmp").exists())
+        check("写入后文件结构", '"positions"' in before and '"version": 1' in before)
+
+        try:
+            portfolio.update_settings(p["id"], {"expr": "Foo($close,5)"})
+            bad_expr = False
+        except ValueError:
+            bad_expr = True
+        check("非法因子表达式被拒", bad_expr)
+
+        # ---- 用假行情验证风控规则 (不触发 qlib) ----
+        n = 25
+        end = date.today()
+        dates = [(end - timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
+        defaults = dict(portfolio.DEFAULT_SETTINGS)
+        raw = {
+            "id": "testpos", "market": "cn", "symbol": "sh600519", "name": "测试",
+            "expr": portfolio.DEFAULT_EXPR, **defaults,
+            "lots": [{"id": "lot1", "date": dates[0], "price": 100, "qty": 100, "fee": 0}],
+            "last_signal": None, "last_signal_error": None,
+        }
+        orig = (portfolio.quote, portfolio.view.load_rows, portfolio._last_indicators, portfolio._factor_block)
+
+        def fake_quote(m, s):
+            return {"market": m, "symbol": s, "name": "测试", "market_label": "A股",
+                    "currency": "CNY", "date": dates[-1], "price": closes[-1],
+                    "rows": n, "start": dates[0], "end": dates[-1]}
+
+        def fake_rows(m, s):
+            return [{"date": dt, "close": c, "factor": 1.0, "open": c, "high": c,
+                     "low": c, "volume": 1} for dt, c in zip(dates, closes)]
+
+        def fake_factors(level="neutral", confidence=None, status="ok", error=None):
+            return {
+                "expr": raw["expr"], "status": status, "source": "stored", "error": error,
+                "signal": {"level": level, "confidence": confidence, "pct": 0.5,
+                           "date": dates[-1], "harmonic": None},
+            }
+
+        def compute(closes, atr=None, factor=None):
+            portfolio.quote = fake_quote
+            portfolio.view.load_rows = fake_rows
+            portfolio._last_indicators = lambda m, s: {"atr14": atr, "ma20": None, "ma60": None}
+            portfolio._factor_block = lambda pos, qd: factor or fake_factors()
+            return portfolio._compute_position(raw)
+
+        try:
+            closes = [100.0] * (n - 1) + [99.0]
+            p = compute(closes, atr=3.0)
+            check("ATR 止损比固定止损更紧", p["stop_kind"] == "ATR" and abs(p["stop_price"] - 94.0) < 1e-9,
+                  f"{p['stop_kind']} {p['stop_price']}")
+
+            closes = [100.0] * (n - 2) + [130.0, 118.0]
+            p = compute(closes)
+            check("达到止盈后移动止盈触发", any(a["type"] == "trail" for a in p["alerts"]),
+                  str([(a["level"], a["type"]) for a in p["alerts"]]))
+            check("移动止盈线 = 峰值回撤", abs(p["stop_price"] - 119.6) < 1e-9, str(p["stop_price"]))
+
+            closes = [100.0] * (n - 2) + [112.0, 99.5]
+            p = compute(closes)
+            check("峰值盈利 >=10% 后保本线触发", any(a["type"] == "breakeven" for a in p["alerts"]),
+                  str([(a["level"], a["type"]) for a in p["alerts"]]))
+
+            closes = [120.0] * n
+            p = compute(closes)
+            check("达到止盈线提醒", any(a["type"] == "take_profit" for a in p["alerts"]),
+                  str([(a["level"], a["type"]) for a in p["alerts"]]))
+
+            closes = [100.0] * (n - 1) + [95.0]
+            p = compute(closes, factor=fake_factors("neutral"))
+            check("时间止损提醒", any(a["type"] == "time" for a in p["alerts"]),
+                  f"holding_td={p['holding_td']} alerts={[a['type'] for a in p['alerts']]}")
+
+            closes = [100.0] * n
+            p = compute(closes, factor=fake_factors("bearish", "medium"))
+            check("因子转弱减仓提醒", any(a["type"] == "factor" for a in p["alerts"]),
+                  str([(a["level"], a["type"]) for a in p["alerts"]]))
+            p = compute(closes, factor=fake_factors("bearish", "weak"))
+            check("弱置信偏空不单独减仓", any(a["type"] == "factor_weak" for a in p["alerts"]))
+            p = compute(closes, factor=fake_factors("unknown", None, "unknown"))
+            check("样本不足不当中性/偏空", any(a["type"] == "factor_unknown" for a in p["alerts"])
+                  and not any(a["type"] == "factor" for a in p["alerts"]))
+            p = compute(closes, factor=fake_factors("neutral", None, "ok", "WorkerError: timeout"))
+            check("刷新失败时提示旧信号可能过期",
+                  any(a["type"] == "factor_error" and a["level"] == "warn" for a in p["alerts"]),
+                  str([(a["level"], a["type"]) for a in p["alerts"]]))
+        finally:
+            portfolio.quote, portfolio.view.load_rows, portfolio._last_indicators, portfolio._factor_block = orig
+
+        # ---- API 读写/导出 ----
+        from web import app as webapp
+        c = webapp.app.test_client()
+        check("/api/positions 200", c.get("/api/positions").status_code == 200)
+        check("/api/quote 200", c.get("/api/quote?market=cn&symbol=sh600519").status_code == 200)
+        check("/api/quote 未知 400", c.get("/api/quote?market=cn&symbol=nope").status_code == 400)
+        r = c.get("/api/positions/export?fmt=csv")
+        check("CSV 导出带 BOM", r.status_code == 200 and r.data.startswith(b"\xef\xbb\xbf"))
+        r = c.get("/api/positions/export")
+        check("JSON 备份", r.status_code == 200 and b'"positions"' in r.data)
+
+        pid = portfolio.list_positions()["positions"][0]["id"]
+        lots = portfolio.list_positions()["positions"][0]["lots"]
+        check("删除单笔买入", c.delete(f"/api/positions/{pid}/lots/{lots[0]['id']}").status_code == 200)
+        lots = portfolio.list_positions()["positions"][0]["lots"]
+        check("删除最后一笔后持仓消失",
+              c.delete(f"/api/positions/{pid}/lots/{lots[0]['id']}").status_code == 200
+              and portfolio.list_positions()["positions"] == [])
+    finally:
+        portfolio.PRIVATE_DIR, portfolio.POS_FILE = old_dir, old_file
 
 
 if __name__ == "__main__":
@@ -254,5 +399,6 @@ if __name__ == "__main__":
     test_holders()
     test_vwap()
     test_factor()
+    test_portfolio()
     print(f"\n结果: {PASS} PASS / {FAIL} FAIL")
     sys.exit(1 if FAIL else 0)

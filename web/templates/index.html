@@ -6,7 +6,8 @@
 <meta name="theme-color" content="#ffffff">
 <meta name="format-detection" content="telephone=no">
 <title>Qlib 数据检视器</title>
-<link rel="stylesheet" href="/static/style.css?v=20261026c">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css?v=20261026e">
 </head>
 <body>
 <header>
@@ -83,6 +84,84 @@
       <div id="anom-table" class="anom-table"></div>
     </div>
 
+    <div class="pos-wrap" id="pos-wrap">
+      <div class="side-title">
+        持仓账本 <span class="muted">买入成本 → 浮盈 / 止损止盈 / 因子转弱 · 数据只存本机</span>
+      </div>
+      <div class="pos-bar">
+        <button id="pos-add" class="btn btn-primary">+ 记录买入</button>
+        <button id="pos-eval" class="btn">刷新因子提醒</button>
+        <span id="pos-status" class="pos-status muted" aria-live="polite">
+          <span id="pos-spinner" class="chart-spinner" hidden></span>
+          <span id="pos-status-text"></span>
+        </span>
+        <span class="spacer"></span>
+        <button id="pos-export-csv" class="btn mini">导出 CSV</button>
+        <button id="pos-export-json" class="btn mini">备份 JSON</button>
+      </div>
+
+      <div id="pos-summary" class="pos-summary"></div>
+      <div id="pos-alerts" class="pos-alerts"></div>
+
+      <div id="pos-form" class="pos-form hidden">
+        <div class="pos-form-title" id="pos-form-title">记录买入</div>
+        <div class="pos-form-grid pos-lot-fields" id="pos-lot-fields">
+          <label class="pos-field">标的
+            <select id="pos-symbol"></select>
+          </label>
+          <label class="pos-field">买入日期
+            <input id="pos-date" type="date">
+          </label>
+          <label class="pos-field">买入价
+            <input id="pos-price" type="number" step="0.0001" min="0" placeholder="成交价">
+          </label>
+          <label class="pos-field">数量
+            <input id="pos-qty" type="number" step="1" min="0" placeholder="股 / 份">
+          </label>
+          <label class="pos-field">手续费
+            <input id="pos-fee" type="number" step="0.01" min="0" value="0">
+          </label>
+          <label class="pos-field">备注
+            <input id="pos-note" maxlength="300" placeholder="可选">
+          </label>
+        </div>
+        <div class="pos-form-grid pos-settings-fields" id="pos-settings-fields">
+          <label class="pos-field pos-field-wide">监控因子（Qlib 表达式）
+            <input id="pos-expr" spellcheck="false" placeholder="Mean($close,5)/Mean($close,20)">
+          </label>
+          <label class="pos-field">止损 %
+            <input id="pos-stop" type="number" step="0.1" min="0.1" max="50">
+          </label>
+          <label class="pos-field">止盈 %
+            <input id="pos-take" type="number" step="0.1" min="0.1" max="500">
+          </label>
+          <label class="pos-field">移动止盈回撤 %
+            <input id="pos-trail" type="number" step="0.1" min="0.1" max="50">
+          </label>
+          <label class="pos-field">保本触发 %
+            <input id="pos-be" type="number" step="0.1" min="0.1" max="200">
+          </label>
+          <label class="pos-field">时间止损（交易日）
+            <input id="pos-time" type="number" step="1" min="1" max="500">
+          </label>
+          <label class="pos-field">ATR 倍数
+            <input id="pos-atr" type="number" step="0.1" min="0.5" max="10">
+          </label>
+        </div>
+        <div class="pos-form-actions">
+          <button id="pos-save" class="btn btn-primary">保存</button>
+          <button id="pos-cancel" class="btn">取消</button>
+          <span id="pos-quote-hint" class="pos-hint"></span>
+        </div>
+        <div class="pos-hint">
+          止损线 = 固定止损与 ATR 止损中<strong>较紧</strong>的一条；盈利达到止盈线后启用移动止盈；
+          峰值盈利达到保本触发后把止损上移到成本。因子提醒需点「刷新因子提醒」。
+        </div>
+      </div>
+
+      <div id="pos-table" class="bt-table pos-table"></div>
+    </div>
+
     <div class="bt-wrap" id="bt-wrap" style="display:none">
       <div class="side-title">信号回测统计 <span class="muted">信号后 N 个交易日真实价收益 · 胜率=方向正确占比</span></div>
       <div id="bt-table" class="bt-table"></div>
@@ -128,6 +207,7 @@
         <span id="fact-spinner" class="chart-spinner" hidden></span>
         <span id="fact-status-text"></span>
       </div>
+      <div id="fact-short" class="fact-short hidden"></div>
       <div id="fact-signal" class="fact-signal" style="display:none"></div>
       <div id="fact-current" class="fact-current" style="display:none"></div>
       <div id="fact-ic" class="fact-ic"></div>
@@ -178,6 +258,6 @@
 </div>
 
 <script src="/static/vendor/echarts.min.js"></script>
-<script src="/static/app.js?v=20261026c"></script>
+<script src="/static/app.js?v=20261026e"></script>
 </body>
 </html>

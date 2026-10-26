@@ -716,6 +716,9 @@ function factBusy(on) {
 function clearFactor(msg) {
   factState.data = null;
   factStatus(msg || "");
+  $("fact-short").classList.add("hidden");
+  $("fact-short").textContent = "";
+  $("fact-bucket-chart").style.display = "";
   $("fact-signal").style.display = "none";
   $("fact-signal").innerHTML = "";
   $("fact-current").style.display = "none";
@@ -759,6 +762,17 @@ async function runFactor() {
 }
 
 function renderFactor(d) {
+  const noGroups = !(d.buckets || []).some((b) => b.n > 0);
+  const shortBox = $("fact-short");
+  if (noGroups) {
+    shortBox.classList.remove("hidden");
+    shortBox.textContent =
+      `样本不足：当前 ${fmtInt(d.count)} 个交易日，滚动分位分组需要至少 ${d.hist_win} 个交易日。` +
+      `因此不能给出分位 / 偏多 / 偏空判断，也不会当作“中性”信号；因子序列和全样本 IC 仍可参考。`;
+  } else {
+    shortBox.classList.add("hidden");
+    shortBox.textContent = "";
+  }
   renderFactSignal(d);
   renderFactCurrent(d);
   renderFactIC(d);
@@ -845,6 +859,13 @@ function renderFactTable(d) {
   const head = `<tr><th>分位组</th><th>组内样本</th><th>因子区间</th><th>历史分位</th>${hs
     .map((h) => `<th>未来 ${h} 日</th>`)
     .join("")}</tr>`;
+  const base = `<tr><td>全样本</td><td>—</td><td>—</td><td>—</td>${hs
+    .map((h) => factCell(d.overall[String(h)]))
+    .join("")}</tr>`;
+  if (!(d.buckets || []).some((b) => b.n > 0)) {
+    $("fact-table").innerHTML = `<table><thead>${head}</thead><tbody>${base}</tbody></table>`;
+    return;
+  }
   const rows = d.buckets.map((b) => {
     const cur = d.current && d.current.group === b.i ? "fact-cur-row" : "";
     const fr = b.factor_lo === null ? "—" : `${num3(b.factor_lo)} ~ ${num3(b.factor_hi)}`;
@@ -853,9 +874,6 @@ function renderFactTable(d) {
       .map((h) => factCell(b.h[String(h)]))
       .join("")}</tr>`;
   });
-  const base = `<tr><td>全样本</td><td>—</td><td>—</td><td>—</td>${hs
-    .map((h) => factCell(d.overall[String(h)]))
-    .join("")}</tr>`;
   $("fact-table").innerHTML = `<table><thead>${head}</thead><tbody>${rows.join("")}${base}</tbody></table>`;
 }
 
@@ -926,7 +944,14 @@ function renderFactChart(d) {
 }
 
 function renderFactBucketChart(d) {
-  if (!factBucketChart) factBucketChart = echarts.init($("fact-bucket-chart"));
+  const wrap = $("fact-bucket-chart");
+  if (!(d.buckets || []).some((b) => b.n > 0)) {
+    if (factBucketChart) factBucketChart.clear();
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "";
+  if (!factBucketChart) factBucketChart = echarts.init(wrap);
   const colors = ["#f2a22d", "#3b7dd8", "#9b59b6"];
   const series = d.horizons.map((h, i) => ({
     name: `未来 ${h} 日`,
@@ -1243,4 +1268,510 @@ $("add-search").onkeydown = (e) => {
 };
 $("add-submit").onclick = submitAdd;
 
-loadSymbols();
+// ---------------------------------------------------------------- 持仓账本
+const posState = { data: null, busy: false, mode: "new", editingId: null };
+const POS_DEFAULT_EXPR = "Mean($close,5)/Mean($close,20)";
+const POS_DEFAULTS = {
+  stop: 8,
+  take: 20,
+  trail: 8,
+  be: 10,
+  time: 20,
+  atr: 2.0,
+};
+
+const num = (v, nd = 2) =>
+  v === null || v === undefined || v === "" || !isFinite(v)
+    ? "—"
+    : Number(v).toLocaleString("zh-CN", { maximumFractionDigits: nd });
+const money = (v, cur) => {
+  if (v === null || v === undefined || !isFinite(v)) return "—";
+  const sym = cur === "USD" ? "$" : cur === "CNY" ? "¥" : "";
+  return `${sym}${Number(v).toLocaleString("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+};
+const plClass = (v) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
+
+function posStatus(msg, busy) {
+  $("pos-status-text").textContent = msg || "";
+  if (busy !== undefined) {
+    $("pos-spinner").hidden = !busy;
+    const box = $("pos-status");
+    box.classList.toggle("busy", busy);
+    if (busy) box.setAttribute("aria-busy", "true");
+    else box.removeAttribute("aria-busy");
+  }
+}
+
+function posBusy(on) {
+  posState.busy = on;
+  $("pos-add").disabled = on;
+  $("pos-eval").disabled = on;
+  $("pos-save").disabled = on;
+  posStatus($("pos-status-text").textContent, on);
+}
+
+async function posFetch(url, opts) {
+  const res = await fetch(url, opts);
+  let d = null;
+  try {
+    d = await res.json();
+  } catch (e) {
+    d = { error: `响应不是 JSON（HTTP ${res.status}）` };
+  }
+  if (!res.ok || (d && d.error)) throw new Error((d && d.error) || `HTTP ${res.status}`);
+  return d;
+}
+
+async function loadPositions() {
+  try {
+    const d = await posFetch("/api/positions");
+    posRender(d);
+    if (!$("pos-status-text").textContent) {
+      posStatus(d.summary && d.summary.count ? `已加载 ${d.summary.count} 只持仓` : "还没有持仓记录");
+    }
+  } catch (e) {
+    posStatus(`读取持仓失败：${e.message}`);
+  }
+}
+
+function posSymbols(selected) {
+  const sel = $("pos-symbol");
+  sel.innerHTML = "";
+  let curMarket = null;
+  let group = null;
+  for (const s of state.catalog) {
+    if (s.market !== curMarket) {
+      curMarket = s.market;
+      group = document.createElement("optgroup");
+      group.label = s.market_label || s.market;
+      sel.appendChild(group);
+    }
+    const opt = document.createElement("option");
+    opt.value = `${s.market}|${s.qlib}`;
+    opt.textContent = `${s.name} (${s.qlib.toUpperCase()})`;
+    if (selected && selected.market === s.market && selected.symbol === s.qlib) opt.selected = true;
+    group.appendChild(opt);
+  }
+  if (!selected && state.market && state.symbol) {
+    sel.value = `${state.market}|${state.symbol}`;
+  }
+}
+
+function posFillDefaults() {
+  $("pos-expr").value = POS_DEFAULT_EXPR;
+  $("pos-stop").value = POS_DEFAULTS.stop;
+  $("pos-take").value = POS_DEFAULTS.take;
+  $("pos-trail").value = POS_DEFAULTS.trail;
+  $("pos-be").value = POS_DEFAULTS.be;
+  $("pos-time").value = POS_DEFAULTS.time;
+  $("pos-atr").value = POS_DEFAULTS.atr;
+}
+
+function posOpenForm() {
+  $("pos-form").classList.remove("hidden");
+  $("pos-form").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function posCloseForm() {
+  $("pos-form").classList.add("hidden");
+  posState.mode = "new";
+  posState.editingId = null;
+  posState.quoteSeq = (posState.quoteSeq || 0) + 1;
+  $("pos-quote-hint").textContent = "";
+}
+
+async function posLoadQuote() {
+  const [market, symbol] = ($("pos-symbol").value || "").split("|");
+  if (!market || !symbol) return;
+  const seq = (posState.quoteSeq = (posState.quoteSeq || 0) + 1);
+  $("pos-quote-hint").textContent = "读取最新收盘价…";
+  try {
+    const d = await posFetch(`/api/quote?market=${market}&symbol=${encodeURIComponent(symbol)}`);
+    if (seq !== posState.quoteSeq) return;
+    posState.quote = d;
+    $("pos-date").value = d.date;
+    $("pos-price").value = d.price;
+    const existing = ((posState.data && posState.data.positions) || []).find(
+      (p) => p.market === market && p.symbol === symbol
+    );
+    $("pos-quote-hint").textContent =
+      `最新收盘 ${d.date} · ${d.price} ${d.currency}` +
+      (posState.mode === "new" && existing ? " · 已有持仓，将追加买入（沿用原设置）" : "");
+  } catch (e) {
+    $("pos-quote-hint").textContent = `读取行情失败：${e.message}`;
+  }
+}
+
+async function posOpenNew() {
+  if (posState.busy) return;
+  posState.mode = "new";
+  posState.editingId = null;
+  $("pos-form-title").textContent = "记录买入";
+  $("pos-lot-fields").classList.remove("hidden");
+  $("pos-settings-fields").classList.remove("hidden");
+  $("pos-symbol").disabled = false;
+  $("pos-symbol").closest(".pos-field").classList.remove("hidden");
+  $("pos-qty").value = "";
+  $("pos-fee").value = "0";
+  $("pos-note").value = "";
+  posFillDefaults();
+  posSymbols(null);
+  posOpenForm();
+  await posLoadQuote();
+  $("pos-qty").focus();
+}
+
+function posOpenLot(p) {
+  if (posState.busy) return;
+  posState.quoteSeq = (posState.quoteSeq || 0) + 1;
+  posState.mode = "lot";
+  posState.editingId = p.id;
+  $("pos-form-title").textContent = `加仓 · ${p.name}`;
+  $("pos-lot-fields").classList.remove("hidden");
+  $("pos-settings-fields").classList.add("hidden");
+  $("pos-symbol").disabled = true;
+  $("pos-symbol").closest(".pos-field").classList.remove("hidden");
+  posSymbols(p);
+  $("pos-date").value = p.last_date || "";
+  $("pos-price").value = p.last_price || "";
+  $("pos-qty").value = "";
+  $("pos-fee").value = "0";
+  $("pos-note").value = "";
+  $("pos-quote-hint").textContent = "追加买入沿用原有风控参数";
+  posOpenForm();
+  $("pos-qty").focus();
+}
+
+function posOpenSettings(p) {
+  if (posState.busy) return;
+  posState.quoteSeq = (posState.quoteSeq || 0) + 1;
+  posState.mode = "settings";
+  posState.editingId = p.id;
+  $("pos-form-title").textContent = `风控设置 · ${p.name}`;
+  $("pos-lot-fields").classList.add("hidden");
+  $("pos-settings-fields").classList.remove("hidden");
+  $("pos-symbol").disabled = true;
+  $("pos-symbol").closest(".pos-field").classList.add("hidden");
+  posSymbols(p);
+  $("pos-expr").value = p.expr || POS_DEFAULT_EXPR;
+  $("pos-stop").value = (p.stop_pct * 100).toFixed(2);
+  $("pos-take").value = (p.take_profit_pct * 100).toFixed(2);
+  $("pos-trail").value = (p.trail_pct * 100).toFixed(2);
+  $("pos-be").value = (p.break_even_trigger * 100).toFixed(2);
+  $("pos-time").value = p.time_stop_days;
+  $("pos-atr").value = p.atr_mult;
+  $("pos-quote-hint").textContent = "修改因子表达式后，需要重新刷新因子提醒";
+  posOpenForm();
+}
+
+function posReadSettings() {
+  const expr = $("pos-expr").value.trim();
+  if (!expr) throw new Error("监控因子不能为空");
+  const pct = (id, label) => {
+    const v = parseFloat($(id).value);
+    if (!isFinite(v) || v <= 0) throw new Error(`${label}必须是正数`);
+    return v / 100;
+  };
+  const days = parseInt($("pos-time").value, 10);
+  if (!isFinite(days) || days < 1) throw new Error("时间止损天数必须是正整数");
+  const atr = parseFloat($("pos-atr").value);
+  if (!isFinite(atr) || atr <= 0) throw new Error("ATR 倍数必须是正数");
+  return {
+    expr,
+    stop_pct: pct("pos-stop", "止损比例"),
+    take_profit_pct: pct("pos-take", "止盈比例"),
+    trail_pct: pct("pos-trail", "移动止盈回撤"),
+    break_even_trigger: pct("pos-be", "保本触发比例"),
+    time_stop_days: days,
+    atr_mult: atr,
+  };
+}
+
+async function posSave() {
+  if (posState.busy) return;
+  const [market, symbol] = ($("pos-symbol").value || "").split("|");
+  if (!market || !symbol) {
+    posStatus("请选择标的");
+    return;
+  }
+  let payload = null;
+  let url = "/api/positions";
+  let method = "POST";
+  try {
+    if (posState.mode === "settings") {
+      payload = posReadSettings();
+      url = `/api/positions/${posState.editingId}`;
+      method = "PATCH";
+    } else {
+      const price = parseFloat($("pos-price").value);
+      const qty = parseFloat($("pos-qty").value);
+      const fee = parseFloat($("pos-fee").value || "0");
+      if (!isFinite(price) || price <= 0) throw new Error("买入价必须是正数");
+      if (!isFinite(qty) || qty <= 0) throw new Error("数量必须是正数");
+      if (!isFinite(fee) || fee < 0) throw new Error("手续费不能为负");
+      payload = {
+        market,
+        symbol,
+        date: $("pos-date").value,
+        price,
+        qty,
+        fee,
+        note: $("pos-note").value,
+      };
+      if (!payload.date) throw new Error("请选择买入日期");
+      if (posState.mode === "new") Object.assign(payload, posReadSettings());
+    }
+  } catch (e) {
+    posStatus(e.message);
+    return;
+  }
+
+  posBusy(true);
+  posStatus(posState.mode === "settings" ? "保存风控设置…" : "保存买入记录…", true);
+  const wasSettings = posState.mode === "settings";
+  try {
+    const d = await posFetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    posRender(d);
+    posCloseForm();
+    posStatus(wasSettings ? "设置已保存" : "买入记录已保存");
+  } catch (e) {
+    posStatus(`保存失败：${e.message}`);
+  } finally {
+    posBusy(false);
+  }
+}
+
+async function posDelete(p) {
+  if (posState.busy) return;
+  if (!confirm(`删除「${p.name}」的整个持仓（含 ${(p.lots || []).length} 笔买入）？`)) return;
+  posBusy(true);
+  posStatus(`删除 ${p.name}…`, true);
+  try {
+    const d = await posFetch(`/api/positions/${p.id}`, { method: "DELETE" });
+    posRender(d);
+    if (posState.editingId === p.id) posCloseForm();
+    posStatus(`已删除 ${p.name}`);
+  } catch (e) {
+    posStatus(`删除失败：${e.message}`);
+  } finally {
+    posBusy(false);
+  }
+}
+
+async function posDeleteLot(p, lotId) {
+  if (posState.busy) return;
+  if (!confirm("删除这笔买入记录？")) return;
+  posBusy(true);
+  posStatus("删除买入记录…", true);
+  try {
+    const d = await posFetch(`/api/positions/${p.id}/lots/${lotId}`, { method: "DELETE" });
+    posRender(d);
+    posStatus("买入记录已删除");
+  } catch (e) {
+    posStatus(`删除失败：${e.message}`);
+  } finally {
+    posBusy(false);
+  }
+}
+
+async function posEvaluate() {
+  if (posState.busy) return;
+  if (!posState.data || !(posState.data.summary || {}).count) {
+    posStatus("还没有持仓，先记录买入");
+    return;
+  }
+  const ids = (posState.data.positions || []).map((p) => p.id);
+  posBusy(true);
+  posStatus("计算因子提醒… 首次需启动 qlib（约 20~60 秒），之后每只约 1 秒", true);
+  try {
+    const d = await posFetch("/api/positions/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    posRender(d);
+    const errors = (d.positions || []).filter(
+      (p) => p.factor && p.factor.status === "error"
+    ).length;
+    posStatus(
+      errors
+        ? `因子提醒已刷新，${errors} 只计算失败（见持仓表）`
+        : `因子提醒已刷新 · ${(d.positions || []).length} 只持仓`
+    );
+  } catch (e) {
+    posStatus(`刷新失败：${e.message}`);
+  } finally {
+    posBusy(false);
+  }
+}
+
+function posExport(fmt) {
+  window.location.href = `/api/positions/export?fmt=${fmt}`;
+  posStatus(fmt === "csv" ? "开始下载 CSV…" : "开始下载 JSON 备份…");
+}
+
+function posFactorBadge(p) {
+  const f = p.factor || {};
+  const sig = f.signal || {};
+  const conf = { strong: "强", medium: "中", weak: "弱" }[sig.confidence] || "";
+  if (f.status === "missing") {
+    return `<span class="pos-badge unk">未检查</span><span class="bt-sub">点上方刷新</span>`;
+  }
+  if (f.status === "error") {
+    return `<span class="pos-badge unk">检查失败</span><span class="bt-sub" title="${esc(f.error || "")}">${esc(
+      (f.error || "").slice(0, 18)
+    )}</span>`;
+  }
+  const map = {
+    bullish: ["偏多", "bull"],
+    bearish: ["偏空", "bear"],
+    neutral: ["中性", "neu"],
+  };
+  const hit = map[sig.level] || ["样本不足", "unk"];
+  const sub = hit[1] === "unk"
+    ? `${sig.reason || "历史不足 250 日"}`
+    : `${conf ? conf + "置信 · " : ""}${sig.date || ""}${f.status === "stale" ? " · 需刷新" : ""}`;
+  return `<span class="pos-badge ${hit[1]}">${hit[0]}</span><span class="bt-sub">${esc(sub)}</span>`;
+}
+
+function posRender(d) {
+  posState.data = d;
+  const s = d.summary || {};
+  const cards = [];
+  cards.push(
+    `<div class="pos-sum-card"><span>持仓</span><b>${s.count || 0} 只</b>` +
+      `<span class="muted">${s.danger || 0} 条危险 · ${s.warn || 0} 条警告</span></div>`
+  );
+  const curOrder = { CNY: 0, USD: 1 };
+  const byCur = Object.entries(s.by_currency || {}).sort(
+    (a, b) => (curOrder[a[0]] ?? 9) - (curOrder[b[0]] ?? 9)
+  );
+  for (const [cur, b] of byCur) {
+    cards.push(
+      `<div class="pos-sum-card"><span>${cur === "CNY" ? "A股" : cur === "USD" ? "美股" : cur} · 市值</span>` +
+        `<b>${money(b.value, cur)}</b>` +
+        `<span class="muted">${b.count} 只 · 成本 ${money(b.cost, cur)} · 浮盈 ` +
+        `<b class="${plClass(b.pnl)}">${money(b.pnl, cur)} (${signedPct(b.pnl_pct)})</b></span></div>`
+    );
+  }
+  $("pos-summary").innerHTML = cards.join("");
+
+  const alerts = d.alerts || [];
+  if (alerts.length) {
+    $("pos-alerts").innerHTML = alerts
+      .map(
+        (a) =>
+          `<div class="pos-alert ${esc(a.level)}" data-pos-id="${esc(a.position_id)}">` +
+          `<div class="pa-title"><b>${esc(a.title)}</b>` +
+          `<span>${esc(a.name)} ${esc((a.symbol || "").toUpperCase())}</span></div>` +
+          `<div class="pa-msg">${esc(a.msg)}</div></div>`
+      )
+      .join("");
+    document.querySelectorAll("#pos-alerts .pos-alert[data-pos-id]").forEach((el) => {
+      el.onclick = () => {
+        const row = document.getElementById(`pos-row-${el.dataset.posId}`);
+        if (!row) return;
+        row.scrollIntoView({ block: "center", behavior: "smooth" });
+        row.classList.add("pos-flash");
+        setTimeout(() => row.classList.remove("pos-flash"), 1600);
+      };
+    });
+  } else if (s.count) {
+    $("pos-alerts").innerHTML = `<div class="pos-alert ok"><div class="pa-msg">当前没有危险/警告级别的提醒。</div></div>`;
+  } else {
+    $("pos-alerts").innerHTML = "";
+  }
+
+  const positions = d.positions || [];
+  if (!positions.length) {
+    $("pos-table").innerHTML =
+      `<div class="pos-empty">还没有持仓。点「+ 记录买入」填买入价和数量，系统会按收盘价计算浮盈，` +
+      `并给出止损/止盈/因子转弱提醒。</div>`;
+    return;
+  }
+
+  const head =
+    `<tr><th>标的</th><th>持仓</th><th>现价</th><th>浮动盈亏</th>` +
+    `<th>风控线</th><th>因子</th><th>提醒</th><th>操作</th></tr>`;
+  const rows = positions.map((p) => {
+    const rowId = `pos-row-${p.id}`;
+    const lots = p.lots || [];
+    const lotHtml = lots
+      .slice()
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+      .map(
+        (x) =>
+          `<div class="pos-lot"><span>${esc(x.date)} · ${num(x.qty, 4)} @ ${num(x.price, 4)}</span>` +
+          `<span class="muted">费 ${num(x.fee, 2)}${x.note ? " · " + esc(x.note) : ""}</span>` +
+          `<button class="pos-mini" data-act="del-lot" data-pos="${esc(p.id)}" data-lot="${esc(
+            x.id
+          )}" title="删除这笔买入">×</button></div>`
+      )
+      .join("");
+    const stale = (p.alerts || []).some((a) => a.type === "stale");
+    const primary = p.primary_alert || { level: "ok", title: "正常", msg: "" };
+    const extra = (p.alerts || []).length - 1;
+    const stopKind =
+      { 固定: "固定止损", ATR: "ATR 止损", 保本: "保本线", 移动止盈: "移动止盈" }[p.stop_kind] ||
+      "止损线";
+    return (
+      `<tr id="${rowId}" class="pos-row ${esc(p.status || "ok")}">` +
+      `<td><b>${esc(p.name || p.symbol)}</b>` +
+      `<span class="bt-sub">${esc(p.market_label || "")} · ${esc((p.symbol || "").toUpperCase())}</span></td>` +
+      `<td><b>${num(p.qty, 4)}</b> <span class="muted">股/份</span>` +
+      `<span class="bt-sub">${lots.length} 笔 · 均价 ${num(p.avg_cost, 4)}</span>` +
+      `<details class="pos-lots"><summary>买入明细</summary>${lotHtml}</details></td>` +
+      `<td><b>${num(p.last_price, 4)}</b>` +
+      `<span class="bt-sub">${esc(p.last_date || "")}${stale ? " · 旧行情" : ""}</span></td>` +
+      `<td class="${plClass(p.pnl)}"><b>${money(p.pnl, p.currency)}</b>` +
+      `<span class="bt-sub">${signedPct(p.pnl_pct)} · 峰值 ${signedPct(p.peak_pnl)}` +
+      `<br>持有 ${num(p.holding_td, 0)} 个交易日</span></td>` +
+      `<td><b>${num(p.stop_price, 4)}</b>` +
+      `<span class="bt-sub">${stopKind} · 止盈 ${num(p.take_profit_price, 4)}</span></td>` +
+      `<td>${posFactorBadge(p)}</td>` +
+      `<td class="pos-alert-cell ${esc(primary.level)}" title="${esc(primary.msg || "")}">` +
+      `<b>${esc(primary.title || "正常")}</b>` +
+      `<span class="bt-sub">${extra > 0 ? `另 ${extra} 条` : esc(primary.msg || "").slice(0, 24)}</span></td>` +
+      `<td><div class="pos-actions">` +
+      `<button class="pos-action" data-act="lot" data-pos="${esc(p.id)}">加仓</button>` +
+      `<button class="pos-action" data-act="settings" data-pos="${esc(p.id)}">设置</button>` +
+      `<button class="pos-action danger" data-act="del" data-pos="${esc(p.id)}">删除</button>` +
+      `</div></td></tr>`
+    );
+  });
+  $("pos-table").innerHTML = `<table>${head}${rows.join("")}</table>`;
+}
+
+function posFind(id) {
+  return ((posState.data && posState.data.positions) || []).find((p) => p.id === id);
+}
+
+$("pos-add").onclick = posOpenNew;
+$("pos-eval").onclick = posEvaluate;
+$("pos-save").onclick = posSave;
+$("pos-cancel").onclick = posCloseForm;
+$("pos-export-csv").onclick = () => posExport("csv");
+$("pos-export-json").onclick = () => posExport("json");
+$("pos-symbol").onchange = () => {
+  if (posState.mode === "new") posLoadQuote();
+};
+
+$("pos-table").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-act]");
+  if (!btn) return;
+  const p = posFind(btn.dataset.pos);
+  if (!p) return;
+  if (btn.dataset.act === "lot") posOpenLot(p);
+  else if (btn.dataset.act === "settings") posOpenSettings(p);
+  else if (btn.dataset.act === "del") posDelete(p);
+  else if (btn.dataset.act === "del-lot") posDeleteLot(p, btn.dataset.lot);
+});
+
+loadSymbols().finally(() => loadPositions());

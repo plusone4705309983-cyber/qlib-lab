@@ -30,18 +30,20 @@ HIST_WIN = factor_eval.HIST_WIN  # 250 日滚动分位窗口
 GROUPS = 5
 HEADLINE_H = 10  # 结论用 10 日
 MIN_SAMPLES = 30  # 少于该样本数的分组, 结论标注"样本偏少"
-_CACHE: dict = {}
+_CACHE: dict = {}  # 原始 qlib 序列 (dates/factor/pct/close_real)
+_RESULT_CACHE: dict = {}  # compute() 的完整分析结果 (含 signal/current)
 _CACHE_MAX = 32
+_RESULT_CACHE_MAX = 16
 # qlib 子进程内存占用不低, 串行化求值, 避免并发请求同时起多个 qlib 进程
 _LOCK = threading.Lock()
 
 
-def _run(market: str, symbol: str, expr: str) -> dict:
+def _run(market: str, symbol: str, expr: str, force: bool = False) -> dict:
     key = (market, symbol, expr)
-    if key in _CACHE:
+    if not force and key in _CACHE:
         return _CACHE[key]
     with _LOCK:
-        if key in _CACHE:  # 等锁期间可能已被别的线程算好
+        if not force and key in _CACHE:  # 等锁期间可能已被别的线程算好
             return _CACHE[key]
         data = factor_runtime.evaluate(market, symbol, expr)
         if len(_CACHE) >= _CACHE_MAX:  # 简单 FIFO, 防止内存无限增长
@@ -320,9 +322,23 @@ def _build_signal(dates, close, pct, factor, buckets, overall, ic):
     }
 
 
-def compute(market: str, symbol: str, expr: str) -> dict:
+def cached(market: str, symbol: str, expr: str) -> dict | None:
+    """只读 compute() 的完整结果缓存, 不触发 qlib。"""
+    try:
+        expr = factor_eval.validate(expr)
+    except Exception:  # noqa: BLE001
+        return None
+    return _RESULT_CACHE.get((market, symbol, expr))
+
+
+def compute(market: str, symbol: str, expr: str, force: bool = False) -> dict:
     expr = factor_eval.validate(expr)
-    d = _run(market, symbol, expr)
+    key = (market, symbol, expr)
+    if not force:
+        hit = _RESULT_CACHE.get(key)
+        if hit is not None:
+            return hit
+    d = _run(market, symbol, expr, force=force)
     dates, factor, close = d["dates"], d["factor"], d["close_real"]
     n = len(dates)
     # Rank(x, 250) 的 min_periods=1, 前 249 天窗口不满 -> 分位不可靠, 剔除
@@ -437,7 +453,7 @@ def compute(market: str, symbol: str, expr: str) -> dict:
 
     signal = _build_signal(dates, close, pct, factor, buckets, overall, ic)
 
-    return {
+    result = {
         "market": market,
         "symbol": symbol,
         "expr": expr,
@@ -456,6 +472,11 @@ def compute(market: str, symbol: str, expr: str) -> dict:
         "signal": signal,
         "note": note,
     }
+    with _LOCK:
+        if len(_RESULT_CACHE) >= _RESULT_CACHE_MAX:
+            _RESULT_CACHE.pop(next(iter(_RESULT_CACHE)))
+        _RESULT_CACHE[key] = result
+    return result
 
 
 if __name__ == "__main__":

@@ -17,8 +17,9 @@ sys.path.insert(0, str(HERE))
 
 import stocks  # noqa: E402
 import view  # noqa: E402
+import portfolio  # noqa: E402
 
-from flask import Flask, jsonify, render_template, request  # noqa: E402
+from flask import Flask, Response, jsonify, render_template, request  # noqa: E402
 
 app = Flask(__name__)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -184,6 +185,106 @@ def api_holder_stocks():
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/positions")
+def api_positions():
+    try:
+        return jsonify(portfolio.list_positions())
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/positions")
+def api_positions_add():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(portfolio.add_lot(payload))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.patch("/api/positions/<pos_id>")
+def api_positions_patch(pos_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(portfolio.update_settings(pos_id, payload))
+    except KeyError:
+        return jsonify({"error": "无此持仓"}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.delete("/api/positions/<pos_id>")
+def api_positions_delete(pos_id):
+    try:
+        return jsonify(portfolio.delete_position(pos_id))
+    except KeyError:
+        return jsonify({"error": "无此持仓"}), 404
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.delete("/api/positions/<pos_id>/lots/<lot_id>")
+def api_positions_delete_lot(pos_id, lot_id):
+    try:
+        return jsonify(portfolio.delete_lot(pos_id, lot_id))
+    except KeyError:
+        return jsonify({"error": "无此持仓或买入记录"}), 404
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/positions/evaluate")
+def api_positions_evaluate():
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get("ids")
+    if ids is not None and (not isinstance(ids, list) or not all(isinstance(x, str) for x in ids)):
+        return jsonify({"error": "ids 必须是字符串数组"}), 400
+    try:
+        return jsonify(portfolio.evaluate(ids))
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"因子提醒刷新失败: {exc}"}), 500
+
+
+@app.get("/api/quote")
+def api_quote():
+    market = request.args.get("market", "cn")
+    symbol = request.args.get("symbol", "").lower()
+    try:
+        return jsonify(portfolio.quote(market, symbol))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/positions/export")
+@app.get("/api/positions/export.csv")
+def api_positions_export():
+    fmt = request.args.get("fmt", "json").lower()
+    if fmt in ("csv", "xlsx"):
+        body = portfolio.export_csv()
+        return Response(
+            body,
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=positions.csv"},
+        )
+    try:
+        body = portfolio.export_json()
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    return Response(
+        body,
+        mimetype="application/json; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=positions.json"},
+    )
 
 
 @app.get("/healthz")
