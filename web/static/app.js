@@ -36,6 +36,18 @@ const IND_META = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// 统一处理登录失效：任何 API 返回 401 时跳到 /login 或 /invite
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await _nativeFetch(...args);
+  if (res.status === 401) {
+    const d = await res.clone().json().catch(() => ({}));
+    if (d && d.login_url) location.href = d.login_url;
+  }
+  return res;
+};
+
 const MQ_NARROW = window.matchMedia("(max-width: 760px)");
 const isShort = () => window.innerHeight < 620;
 let viewMode = "";
@@ -52,10 +64,11 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// ---------------------------------------------------------------- 侧栏
+// ---------------------------------------------------------------- 侧栏（我的自选）
 async function loadSymbols() {
   const res = await fetch("/api/symbols");
-  state.catalog = await res.json();
+  const data = await res.json();
+  state.catalog = Array.isArray(data) ? data : (data.symbols || []);
   $("pool-count").textContent = `(${state.catalog.length})`;
 
   const list = $("symbol-list");
@@ -75,15 +88,151 @@ async function loadSymbols() {
     div.dataset.market = s.market;
     div.dataset.symbol = s.qlib;
     div.innerHTML =
-      `<span><span class="s-name">${s.name}</span> ` +
-      `<span class="s-code">${s.qlib.toUpperCase()}</span></span>` +
-      `<span class="s-badge ${n ? "" : "zero"}">${n}</span>`;
+      `<span class="sym-main"><span class="s-name">${esc(s.name)}</span> ` +
+      `<span class="s-code">${esc(s.qlib.toUpperCase())}</span></span>` +
+      `<span class="s-badge ${n ? "" : "zero"}">${n}</span>` +
+      `<button class="sym-del" title="移出自选">×</button>`;
     div.onclick = () => selectSymbol(s.market, s.qlib);
+    div.querySelector(".sym-del").onclick = (ev) => {
+      ev.stopPropagation();
+      removeWatch(s.market, s.qlib);
+    };
     list.appendChild(div);
   }
-  const first = state.catalog[0];
-  if (first && !state.symbol) selectSymbol(first.market, first.qlib);
+
+  if (!state.catalog.length) {
+    const empty = document.createElement("div");
+    empty.className = "sym-empty";
+    empty.innerHTML =
+      '还没有自选股<br><button id="sym-empty-add" class="btn mini">从全量股票池添加</button>';
+    list.appendChild(empty);
+    $("sym-empty-add").onclick = openWatchModal;
+  }
+
+  const stillThere =
+    state.symbol && state.catalog.some((s) => s.market === state.market && s.qlib === state.symbol);
+  if (!stillThere) {
+    if (state.catalog.length) {
+      selectSymbol(state.catalog[0].market, state.catalog[0].qlib);
+    } else {
+      state.market = null;
+      state.symbol = null;
+      state.payload = null;
+      state.indData = null;
+      $("cur-name").textContent = "—";
+      $("cur-code").textContent = "";
+      $("summary").textContent = "请先添加自选股";
+      $("anom-table").innerHTML = "";
+      $("bin-result").innerHTML = "";
+      clearFactor("请先添加自选股");
+      clearHolders();
+      if (state.chart) { try { state.chart.clear(); } catch (_) {} }
+    }
+  }
 }
+
+// ---------------------------------------------------------------- 管理自选
+let watchCatalog = [];
+
+async function openWatchModal() {
+  $("watch-modal").classList.remove("hidden");
+  $("watch-filter").value = "";
+  $("watch-list").innerHTML = '<div class="none">加载中…</div>';
+  try {
+    const d = await (await fetch("/api/catalog")).json();
+    watchCatalog = Array.isArray(d) ? d : [];
+    renderWatchList();
+  } catch (e) {
+    $("watch-list").innerHTML = `<div class="none">加载失败：${esc(e.message)}</div>`;
+  }
+  $("watch-filter").focus();
+}
+
+function closeWatchModal() {
+  $("watch-modal").classList.add("hidden");
+}
+
+function renderWatchList() {
+  const q = $("watch-filter").value.trim().toLowerCase();
+  const rows = watchCatalog.filter(
+    (s) => !q || s.name.toLowerCase().includes(q) || s.qlib.includes(q)
+  );
+  if (!rows.length) {
+    $("watch-list").innerHTML = '<div class="none">没有匹配的标的</div>';
+    return;
+  }
+  let html = "";
+  let curMarket = null;
+  for (const s of rows) {
+    if (s.market !== curMarket) {
+      curMarket = s.market;
+      html += `<div class="market-head">${esc(s.market_label || s.market)}</div>`;
+    }
+    html += `<div class="watch-row">
+      <span class="sym-main"><span class="s-name">${esc(s.name)}</span>
+        <span class="s-code">${esc(s.qlib.toUpperCase())}</span></span>
+      <button class="btn mini ${s.in_watchlist ? "danger" : "btn-primary"}"
+        data-market="${esc(s.market)}" data-symbol="${esc(s.qlib)}"
+        data-added="${s.in_watchlist ? "1" : "0"}">
+        ${s.in_watchlist ? "移出" : "添加"}
+      </button>
+    </div>`;
+  }
+  $("watch-list").innerHTML = html;
+  $("watch-list").querySelectorAll("button[data-symbol]").forEach((btn) => {
+    btn.onclick = () => toggleWatch(btn.dataset.market, btn.dataset.symbol, btn.dataset.added === "1", btn);
+  });
+}
+
+async function toggleWatch(market, symbol, added, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const url = added
+      ? `/api/watchlist/${encodeURIComponent(market)}/${encodeURIComponent(symbol)}`
+      : "/api/watchlist";
+    const opts = added
+      ? { method: "DELETE" }
+      : {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ market, symbol }),
+        };
+    const d = await (await fetch(url, opts)).json();
+    if (d.error) throw new Error(d.error);
+    const item = watchCatalog.find((x) => x.market === market && x.qlib === symbol);
+    if (item) item.in_watchlist = !added;
+    renderWatchList();
+    await loadSymbols();
+  } catch (e) {
+    alert(`更新自选失败：${e.message}`);
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function removeWatch(market, symbol) {
+  try {
+    const d = await (
+      await fetch(`/api/watchlist/${encodeURIComponent(market)}/${encodeURIComponent(symbol)}`, {
+        method: "DELETE",
+      })
+    ).json();
+    if (d.error) throw new Error(d.error);
+    await loadSymbols();
+  } catch (e) {
+    alert(`移出自选失败：${e.message}`);
+  }
+}
+
+$("watch-manage").onclick = (ev) => {
+  ev.stopPropagation();
+  openWatchModal();
+};
+$("watch-close").onclick = closeWatchModal;
+$("watch-done").onclick = closeWatchModal;
+$("watch-modal").onclick = (ev) => {
+  if (ev.target.id === "watch-modal") closeWatchModal();
+};
+$("watch-filter").oninput = renderWatchList;
 
 function markActive() {
   document.querySelectorAll(".sym").forEach((el) => {
@@ -1326,6 +1475,7 @@ async function posFetch(url, opts) {
 }
 
 async function loadPositions() {
+  if (!$("pos-wrap")) return;
   try {
     const d = await posFetch("/api/positions");
     posRender(d);
@@ -1354,6 +1504,17 @@ function posSymbols(selected) {
     opt.textContent = `${s.name} (${s.qlib.toUpperCase()})`;
     if (selected && selected.market === s.market && selected.symbol === s.qlib) opt.selected = true;
     group.appendChild(opt);
+  }
+  // 持仓里的标的可能已不在自选（例如用户后来移出），仍要能编辑
+  if (selected && !state.catalog.some((s) => s.market === selected.market && s.qlib === selected.symbol)) {
+    const group2 = document.createElement("optgroup");
+    group2.label = selected.market === "us" ? "美股（不在自选）" : "A股（不在自选）";
+    const opt = document.createElement("option");
+    opt.value = `${selected.market}|${selected.symbol}`;
+    opt.textContent = `${selected.name || selected.symbol} (${String(selected.symbol).toUpperCase()})`;
+    opt.selected = true;
+    group2.appendChild(opt);
+    sel.appendChild(group2);
   }
   if (!selected && state.market && state.symbol) {
     sel.value = `${state.market}|${state.symbol}`;
@@ -1753,25 +1914,237 @@ function posFind(id) {
   return ((posState.data && posState.data.positions) || []).find((p) => p.id === id);
 }
 
-$("pos-add").onclick = posOpenNew;
-$("pos-eval").onclick = posEvaluate;
-$("pos-save").onclick = posSave;
-$("pos-cancel").onclick = posCloseForm;
-$("pos-export-csv").onclick = () => posExport("csv");
-$("pos-export-json").onclick = () => posExport("json");
-$("pos-symbol").onchange = () => {
-  if (posState.mode === "new") posLoadQuote();
-};
+// P1 按用户隔离账本前，持仓只对 admin 开放；非管理员页面不渲染该区块
+if ($("pos-wrap")) {
+  $("pos-add").onclick = posOpenNew;
+  $("pos-eval").onclick = posEvaluate;
+  $("pos-save").onclick = posSave;
+  $("pos-cancel").onclick = posCloseForm;
+  $("pos-export-csv").onclick = () => posExport("csv");
+  $("pos-export-json").onclick = () => posExport("json");
+  $("pos-symbol").onchange = () => {
+    if (posState.mode === "new") posLoadQuote();
+  };
 
-$("pos-table").addEventListener("click", (ev) => {
-  const btn = ev.target.closest("button[data-act]");
-  if (!btn) return;
-  const p = posFind(btn.dataset.pos);
-  if (!p) return;
-  if (btn.dataset.act === "lot") posOpenLot(p);
-  else if (btn.dataset.act === "settings") posOpenSettings(p);
-  else if (btn.dataset.act === "del") posDelete(p);
-  else if (btn.dataset.act === "del-lot") posDeleteLot(p, btn.dataset.lot);
+  $("pos-table").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const p = posFind(btn.dataset.pos);
+    if (!p) return;
+    if (btn.dataset.act === "lot") posOpenLot(p);
+    else if (btn.dataset.act === "settings") posOpenSettings(p);
+    else if (btn.dataset.act === "del") posDelete(p);
+    else if (btn.dataset.act === "del-lot") posDeleteLot(p, btn.dataset.lot);
+  });
+}
+
+// ---------------------------------------------------------------- 模拟交易（Alpaca Paper）
+let brokerState = { account: null, preview: null, configured: false };
+
+async function brokerFetch(url, opts) {
+  const res = await fetch(url, opts);
+  let d = null;
+  try {
+    d = await res.json();
+  } catch (e) {
+    d = { error: `响应不是 JSON（HTTP ${res.status}）` };
+  }
+  if (!res.ok || (d && d.error)) throw new Error((d && d.error) || `HTTP ${res.status}`);
+  return d;
+}
+
+function brokerMoney(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  return Number(v).toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+async function brokerStatus() {
+  try {
+    const d = await brokerFetch("/api/broker/status");
+    brokerState.configured = true;
+    brokerState.account = d.account || {};
+    $("broker-status-text").textContent = "已配置（Paper）";
+    const acc = d.account || {};
+    $("broker-account").innerHTML = [
+      ["买入力度", brokerMoney(acc.buying_power)],
+      ["现金", brokerMoney(acc.cash)],
+      ["权益", brokerMoney(acc.equity)],
+      ["持仓市值", brokerMoney(acc.long_market_value)],
+    ]
+      .map(([k, v]) => `<div class="broker-card"><span>${k}</span><b>${v}</b></div>`)
+      .join("");
+  } catch (e) {
+    brokerState.configured = false;
+    brokerState.account = null;
+    $("broker-status-text").textContent = e.message.includes("密钥") ? e.message : `未配置或错误：${e.message}`;
+    $("broker-account").innerHTML = "";
+  }
+}
+
+async function brokerPositions() {
+  try {
+    const d = await brokerFetch("/api/broker/positions");
+    const rows = d.positions || [];
+    if (!rows.length) {
+      $("broker-positions").innerHTML = '<div class="empty">暂无模拟盘持仓</div>';
+      return;
+    }
+    const head = "<tr><th>标的</th><th>数量</th><th class=\"right\">均价</th><th class=\"right\">市值</th><th class=\"right\">盈亏</th></tr>";
+    const body = rows
+      .map(
+        (p) =>
+          `<tr><td>${esc(p.symbol)}</td><td>${p.qty}</td><td class="right">${Number(p.avg_entry_price || 0).toFixed(2)}</td>` +
+          `<td class="right">${brokerMoney(p.market_value)}</td><td class="right">${brokerMoney(p.unrealized_pl)}</td></tr>`
+      )
+      .join("");
+    $("broker-positions").innerHTML = `<table>${head}${body}</table>`;
+  } catch (e) {
+    $("broker-positions").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+async function brokerOrders() {
+  try {
+    const d = await brokerFetch("/api/broker/orders?status=all&limit=20");
+    const rows = d.orders || [];
+    if (!rows.length) {
+      $("broker-orders").innerHTML = '<div class="empty">暂无委托</div>';
+      return;
+    }
+    const head = "<tr><th>标的</th><th>方向</th><th>数量</th><th>状态</th><th>类型</th></tr>";
+    const body = rows
+      .map(
+        (o) =>
+          `<tr><td>${esc(o.symbol)}</td><td>${esc(o.side)}</td><td>${o.qty || o.notional || ""}</td>` +
+          `<td>${esc(o.status)}</td><td>${esc(o.type)}</td></tr>`
+      )
+      .join("");
+    $("broker-orders").innerHTML = `<table>${head}${body}</table>`;
+  } catch (e) {
+    $("broker-orders").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+function brokerFill() {
+  const m = state.market;
+  const s = state.symbol;
+  if (m && s) {
+    $("broker-symbol").value = s.toUpperCase();
+  } else {
+    $("broker-symbol").value = $("broker-symbol").value || "";
+  }
+  const fa = factState.data && factState.data.signal;
+  if (fa && fa.level === "bearish") {
+    $("broker-side").value = "sell";
+  } else if (fa && fa.level === "bullish") {
+    $("broker-side").value = "buy";
+  }
+  if (!$("broker-notional").value && !$("broker-qty").value) {
+    $("broker-notional").value = "1000";
+  }
+  $("broker-hint").textContent = "已从当前标的/信号预填（市价单，需预览并确认）";
+  brokerState.preview = null;
+  $("broker-preview-box").classList.add("hidden");
+  $("broker-preview-box").innerHTML = "";
+  $("broker-submit").disabled = true;
+}
+
+async function brokerPreview() {
+  const payload = {
+    symbol: $("broker-symbol").value.trim(),
+    side: $("broker-side").value,
+    qty: $("broker-qty").value ? Number($("broker-qty").value) : undefined,
+    notional: $("broker-notional").value ? Number($("broker-notional").value) : undefined,
+  };
+  if (!payload.symbol) {
+    $("broker-hint").textContent = "请填写标的";
+    return;
+  }
+  if (payload.qty === undefined && payload.notional === undefined) {
+    $("broker-hint").textContent = "请填写股数或金额（USD）";
+    return;
+  }
+  $("broker-hint").textContent = "预览中...";
+  try {
+    const d = await brokerFetch("/api/broker/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    brokerState.preview = { ...payload, preview: d.preview };
+    const box = $("broker-preview-box");
+    box.innerHTML =
+      `<div><b>预览（手动确认）</b></div>` +
+      `<div>标的：${esc(payload.symbol)} · 方向：${payload.side.toUpperCase()} · 类型：市价单（day）</div>` +
+      `<div>股数：${payload.qty ?? "—"} · 金额：${payload.notional ? "$" + payload.notional : "—"}</div>` +
+      `<div class="muted">${esc(d.note || "")}</div>`;
+    box.classList.remove("hidden");
+    $("broker-submit").disabled = false;
+    $("broker-hint").textContent = "请确认无误后点「确认发往 Alpaca Paper」";
+  } catch (e) {
+    $("broker-hint").textContent = e.message;
+    $("broker-submit").disabled = true;
+  }
+}
+
+async function brokerSubmit() {
+  if (!brokerState.preview) {
+    $("broker-hint").textContent = "请先预览订单";
+    return;
+  }
+  if (!confirm(`确认发往 Alpaca Paper（市价单）\n${brokerState.preview.symbol} ${brokerState.preview.side.toUpperCase()}？`)) {
+    return;
+  }
+  $("broker-submit").disabled = true;
+  $("broker-hint").textContent = "下单中...";
+  try {
+    const payload = {
+      symbol: brokerState.preview.symbol,
+      side: brokerState.preview.side,
+      type: "market",
+      time_in_force: "day",
+      qty: brokerState.preview.qty,
+      notional: brokerState.preview.notional,
+    };
+    const d = await brokerFetch("/api/broker/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    $("broker-hint").textContent = `已提交：订单 ${d.order && d.order.id ? d.order.id : "已创建"}（状态：${d.order && d.order.status ? d.order.status : "未知"}）`;
+    brokerState.preview = null;
+    $("broker-preview-box").classList.add("hidden");
+    $("broker-preview-box").innerHTML = "";
+    brokerPositions();
+    brokerOrders();
+    brokerStatus();
+  } catch (e) {
+    $("broker-hint").textContent = e.message;
+    $("broker-submit").disabled = false;
+  }
+}
+
+// P1（BYOK）上线前，模拟交易只对 admin 开放；非管理员页面不渲染该区块
+if ($("broker-refresh")) {
+  $("broker-refresh").onclick = () => {
+    brokerStatus();
+    brokerPositions();
+    brokerOrders();
+  };
+  $("broker-fill").onclick = brokerFill;
+  $("broker-preview").onclick = brokerPreview;
+  $("broker-submit").onclick = brokerSubmit;
+
+  brokerStatus();
+  brokerPositions();
+  brokerOrders();
+  setInterval(() => {
+    brokerPositions();
+    brokerOrders();
+    brokerStatus();
+  }, 60000);
+}
+
+loadSymbols().finally(() => {
+  if ($("pos-wrap")) loadPositions();
 });
-
-loadSymbols().finally(() => loadPositions());

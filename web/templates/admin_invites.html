@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>邀请码管理 · Qlib 数据检视器</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-body">
+<header>
+  <a class="admin-back" href="/">← 返回</a>
+  <div class="brand">邀请码管理</div>
+  <div class="brand-sub">只有 admin 可见 · 一次性 + 短有效期最安全</div>
+  <div class="spacer"></div>
+  <div class="user-box">
+    <span class="user-email">{{ current_user.email }}</span>
+    <span class="role-badge admin">admin</span>
+    <a class="user-link" href="/logout">退出</a>
+  </div>
+</header>
+
+<main class="admin-main">
+  <section class="admin-card">
+    <div class="admin-card-title">生成邀请码</div>
+    <div class="admin-form">
+      <label>可使用次数
+        <input id="gen-max" type="number" min="1" max="50" value="1">
+      </label>
+      <label>有效期
+        <select id="gen-expires">
+          <option value="24">24 小时</option>
+          <option value="72" selected>72 小时</option>
+          <option value="168">7 天</option>
+          <option value="720">30 天</option>
+        </select>
+      </label>
+      <button id="gen-btn" class="btn btn-primary">生成</button>
+      <span id="gen-status" class="muted"></span>
+    </div>
+    <div id="gen-result" class="invite-result hidden"></div>
+    <div class="admin-note">
+      生成后把链接发给朋友；对方需先通过 Cloudflare Access 邮箱验证，再输入邀请码。
+      24 小时内最多生成 50 个，防止误操作。
+    </div>
+  </section>
+
+  <section class="admin-card">
+    <div class="admin-card-title">邀请码 <span id="invite-count" class="muted"></span></div>
+    <div id="invite-table" class="admin-table-wrap"></div>
+  </section>
+
+  <section class="admin-card">
+    <div class="admin-card-title">用户 <span id="user-count" class="muted"></span></div>
+    <div id="user-table" class="admin-table-wrap"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtTime = (s) => {
+  if (!s) return "—";
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? esc(s) : d.toLocaleString("zh-CN", { hour12: false });
+};
+const STATUS = {
+  active: ["有效", "ok"],
+  used: ["已用完", "muted"],
+  expired: ["已过期", "warn"],
+};
+
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  const d = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    location.href = d.login_url || "/login";
+    throw new Error("登录已失效");
+  }
+  if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`);
+  return d;
+}
+
+function renderInvites(invites) {
+  $("invite-count").textContent = `(${invites.length})`;
+  if (!invites.length) {
+    $("invite-table").innerHTML = '<div class="admin-empty">还没有邀请码</div>';
+    return;
+  }
+  const rows = invites.map((v) => {
+    const [label, cls] = STATUS[v.status] || [v.status, "muted"];
+    return `<tr>
+      <td class="mono">${esc(v.code)}</td>
+      <td><span class="status-pill ${cls}">${label}</span></td>
+      <td>${v.used_count} / ${v.max_uses}</td>
+      <td>${fmtTime(v.expires_at)}</td>
+      <td>${esc(v.created_by_email || "—")}</td>
+      <td>${esc(v.used_by_email || "—")}</td>
+      <td>${fmtTime(v.created_at)}</td>
+      <td>${v.status === "active"
+        ? `<button class="btn mini danger" data-revoke="${v.id}" data-code="${esc(v.code)}">作废</button>`
+        : "—"}</td>
+    </tr>`;
+  }).join("");
+  $("invite-table").innerHTML = `<table class="admin-table">
+    <thead><tr><th>邀请码</th><th>状态</th><th>已用</th><th>过期时间</th>
+      <th>创建人</th><th>使用者</th><th>创建时间</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+  $("invite-table").querySelectorAll("[data-revoke]").forEach((btn) => {
+    btn.onclick = () => revoke(btn.dataset.revoke, btn.dataset.code);
+  });
+}
+
+function renderUsers(users) {
+  $("user-count").textContent = `(${users.length})`;
+  const rows = users.map((u) => `<tr>
+    <td>${esc(u.email)}</td>
+    <td><span class="role-badge ${u.role === "admin" ? "admin" : ""}">${esc(u.role)}</span></td>
+    <td>${esc(u.status)}</td>
+    <td>${u.watchlist_count ?? 0}</td>
+    <td>${fmtTime(u.created_at)}</td>
+    <td>${fmtTime(u.last_login_at)}</td>
+  </tr>`).join("");
+  $("user-table").innerHTML = `<table class="admin-table">
+    <thead><tr><th>邮箱</th><th>角色</th><th>状态</th><th>自选数</th>
+      <th>创建时间</th><th>最近登录</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="6" class="admin-empty">还没有用户</td></tr>'}</tbody></table>`;
+}
+
+async function load() {
+  try {
+    const d = await api("/api/admin/invites");
+    renderInvites(d.invites || []);
+    renderUsers(d.users || []);
+    $("gen-status").textContent = `24 小时内已生成 ${d.quota.used}/${d.quota.max}`;
+  } catch (e) {
+    $("gen-status").textContent = `加载失败：${e.message}`;
+  }
+}
+
+async function generate() {
+  const btn = $("gen-btn");
+  btn.disabled = true;
+  $("gen-status").textContent = "生成中…";
+  try {
+    const d = await api("/api/admin/invites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        max_uses: parseInt($("gen-max").value, 10) || 1,
+        expires_hours: parseInt($("gen-expires").value, 10) || 72,
+      }),
+    });
+    const inv = d.invite;
+    const box = $("gen-result");
+    box.classList.remove("hidden");
+    box.innerHTML = `<div class="invite-code mono">${esc(inv.code)}</div>
+      <div class="invite-link"><input id="invite-link-input" readonly value="${esc(d.link)}">
+        <button id="copy-link" class="btn mini">复制链接</button></div>
+      <div class="admin-note">有效期至 ${fmtTime(inv.expires_at)} · 可用 ${inv.max_uses} 次</div>`;
+    $("copy-link").onclick = async () => {
+      const input = $("invite-link-input");
+      input.select();
+      try {
+        await navigator.clipboard.writeText(input.value);
+        $("copy-link").textContent = "已复制";
+      } catch (_) {
+        document.execCommand("copy");
+        $("copy-link").textContent = "已复制";
+      }
+    };
+    $("gen-status").textContent = "已生成";
+    await load();
+  } catch (e) {
+    $("gen-status").textContent = `生成失败：${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function revoke(id, code) {
+  if (!confirm(`作废邀请码 ${code}？`)) return;
+  try {
+    await api(`/api/admin/invites/${id}`, { method: "DELETE" });
+    $("gen-status").textContent = `已作废 ${code}`;
+    await load();
+  } catch (e) {
+    $("gen-status").textContent = `作废失败：${e.message}`;
+  }
+}
+
+$("gen-btn").onclick = generate;
+load();
+</script>
+</body>
+</html>

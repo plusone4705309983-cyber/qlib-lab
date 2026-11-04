@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>邀请码准入 · Qlib 数据检视器</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="auth-body">
+  <main class="auth-card">
+    <div class="auth-brand">Qlib 数据检视器</div>
+    <h1>输入邀请码</h1>
+    <p class="auth-text">
+      已识别邮箱 <strong>{{ pending_email }}</strong>，但该邮箱还不是本站用户。
+      请输入管理员提供的邀请码完成准入。
+    </p>
+
+    <form id="invite-form" class="auth-form" autocomplete="off">
+      <label for="invite-code">邀请码</label>
+      <input id="invite-code" name="code" value="{{ preset_code }}"
+             placeholder="INV-XXXX-XXXX" spellcheck="false" autofocus>
+      <button id="invite-submit" class="btn btn-primary" type="submit">验证并进入</button>
+    </form>
+
+    <div id="invite-error" class="auth-error" role="alert"></div>
+    <p class="auth-hint">
+      邀请码一次性使用、默认 72 小时有效。没有邀请码请联系站点管理员。
+    </p>
+  </main>
+
+<script>
+const form = document.getElementById("invite-form");
+const input = document.getElementById("invite-code");
+const btn = document.getElementById("invite-submit");
+const err = document.getElementById("invite-error");
+
+form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  err.textContent = "";
+  const code = input.value.trim();
+  if (!code) { err.textContent = "请输入邀请码"; return; }
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/invite/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`);
+    location.href = d.redirect || "/";
+  } catch (e) {
+    err.textContent = e.message;
+    btn.disabled = false;
+    input.focus();
+    input.select();
+  }
+});
+</script>
+</body>
+</html>

@@ -717,3 +717,229 @@ body.nav-collapsed .resizer { display: none; }
   .pos-field-wide { grid-column: auto; }
   .pos-actions { flex-wrap: nowrap; }
 }
+
+/* ------------------------------------------------------------ 模拟交易（Alpaca Paper） */
+.broker-wrap { margin-top: 18px; }
+.broker-wrap .side-title { font-weight: 600; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.broker-wrap .side-title .muted { font-weight: 400; font-size: 12px; }
+.broker-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 6px; }
+.broker-account { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+.broker-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 7px 10px; display: flex; flex-direction: column; gap: 2px; }
+.broker-card span { font-size: 11px; color: var(--muted); }
+.broker-card b { font-variant-numeric: tabular-nums; }
+.broker-form { border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; padding: 10px 12px; }
+.broker-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px 10px; }
+.broker-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
+.broker-field input, .broker-field select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--text); font-size: 12.5px; }
+.broker-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.broker-preview { margin-top: 10px; padding: 9px 12px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; background: var(--panel); line-height: 1.8; }
+.broker-preview.hidden { display: none; }
+.broker-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.broker-list-title { font-weight: 600; margin-bottom: 6px; }
+.broker-table { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow-x: auto; }
+.broker-table table { width: 100%; border-collapse: collapse; min-width: 240px; }
+.broker-table th, .broker-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; font-size: 12px; font-variant-numeric: tabular-nums; }
+.broker-table th { background: #f7f8fa; color: #4a5058; font-weight: 600; }
+.broker-table td.right, .broker-table th.right { text-align: right; }
+.broker-table .empty { padding: 10px; color: var(--muted); text-align: center; }
+.broker-note { margin-top: 8px; font-size: 11px; }
+@media (max-width: 760px) {
+  .broker-grid { grid-template-columns: 1fr 1fr; }
+  .broker-lists { grid-template-columns: 1fr; }
+}
+
+/* ---------------------------------------------------------------- 多用户 P0 */
+.user-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.user-email {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-link { color: var(--accent); text-decoration: none; }
+.user-link:hover { text-decoration: underline; }
+.role-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #4a5058;
+  font-size: 10px;
+  line-height: 16px;
+}
+.role-badge.admin { background: #fff3d6; color: #8a5a00; }
+
+#side-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+#side-toggle .side-manage {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: #4a5058;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+#side-toggle .side-manage:hover { background: #eef2f7; }
+.sym-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym-del {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #b6bcc5;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  visibility: hidden;
+}
+.sym:hover .sym-del { visibility: visible; }
+.sym-del:hover { background: #fde8e8; color: var(--error); }
+.sym-empty { padding: 14px 8px; color: var(--muted); line-height: 2; text-align: center; }
+
+.watch-modal { width: min(620px, calc(100vw - 28px)); }
+.watch-hint { padding: 8px 2px; font-size: 12px; }
+.watch-list {
+  max-height: min(56vh, 520px);
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+.watch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 4px;
+  border-bottom: 1px solid #f0f2f5;
+}
+.watch-row .btn.mini { min-width: 52px; }
+.btn.danger { color: var(--error); border-color: #f3c1c3; }
+.btn.danger:hover { background: #fde8e8; }
+
+/* 登录 / 邀请码 */
+.auth-body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at 20% 0%, #e8efff 0, var(--bg) 46%);
+}
+.auth-card {
+  width: min(520px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 28px 30px 26px;
+  box-shadow: 0 18px 50px rgba(31, 35, 41, 0.08);
+}
+.auth-brand { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: 0.04em; }
+.auth-card h1 { margin: 8px 0 14px; font-size: 22px; }
+.auth-text { color: #4a5058; line-height: 1.8; margin: 0 0 14px; }
+.auth-hint { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 14px 0 0; }
+.auth-warn {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff7e6;
+  color: #8a5a00;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.auth-form { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+.auth-form label { color: #4a5058; font-weight: 600; }
+.auth-form input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-family: Consolas, "Courier New", monospace;
+}
+.auth-form input:focus { outline: 2px solid #bcd3ff; border-color: var(--accent); }
+.auth-form .btn { margin-top: 6px; padding: 10px 14px; }
+.auth-error { color: var(--error); min-height: 18px; margin-top: 10px; font-size: 12px; }
+.auth-actions { margin-top: 18px; }
+
+/* 管理后台 */
+.admin-body { min-height: 100vh; background: var(--bg); }
+.admin-body header { flex-wrap: wrap; }
+.admin-back { color: var(--accent); text-decoration: none; font-size: 13px; }
+.admin-back:hover { text-decoration: underline; }
+.admin-main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.admin-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.admin-card-title { font-weight: 700; font-size: 14px; margin-bottom: 12px; }
+.admin-form { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.admin-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.admin-form input, .admin-form select {
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+}
+.admin-form input { width: 110px; }
+.admin-note { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 10px; }
+.invite-result {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px dashed #bcd3ff;
+  border-radius: 10px;
+  background: #f7faff;
+}
+.invite-code { font-size: 20px; font-weight: 700; letter-spacing: 0.08em; color: var(--accent); }
+.invite-link { display: flex; gap: 8px; margin-top: 8px; }
+.invite-link input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.admin-table-wrap { overflow-x: auto; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.admin-table th, .admin-table td { padding: 7px 8px; border-bottom: 1px solid #eef0f3; text-align: left; white-space: nowrap; }
+.admin-table th { color: var(--muted); font-weight: 600; background: #fafbfc; }
+.admin-table tr:hover td { background: #fafbfc; }
+.admin-empty { padding: 16px; text-align: center; color: var(--muted); }
+.mono { font-family: Consolas, "Courier New", monospace; }
+.status-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; }
+.status-pill.ok { background: #e7f7ee; color: #167a45; }
+.status-pill.muted { background: #eef0f3; color: #6b7280; }
+.status-pill.warn { background: #fff3d6; color: #8a5a00; }
+
+@media (max-width: 760px) {
+  .user-email { max-width: 120px; }
+  .brand-sub { display: none; }
+  .admin-main { padding: 12px; }
+  .admin-form { align-items: stretch; }
+}

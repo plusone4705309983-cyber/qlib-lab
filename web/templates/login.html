@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>登录 · Qlib 数据检视器</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="auth-body">
+  <main class="auth-card">
+    <div class="auth-brand">Qlib 数据检视器</div>
+    {% if logged_out %}
+      <h1>已退出应用会话</h1>
+      <p class="auth-text">
+        Cloudflare Access 的邮箱验证仍然有效。点「重新进入」会再次自动登录；
+        若要完全退出，请同时清理 Cloudflare Access 会话或关闭浏览器。
+      </p>
+      <div class="auth-actions">
+        <a class="btn btn-primary" href="/">重新进入</a>
+      </div>
+    {% else %}
+    <h1>未识别到访问身份</h1>
+
+    {% if trust_header %}
+      <p class="auth-text">
+        本站通过 <strong>Cloudflare Access</strong> 做外层门禁。请从 Cloudflare 验证过的入口访问；
+        如果你已经验证过邮箱，仍然看到这个页面，请联系管理员检查 Tunnel / Access 配置。
+      </p>
+    {% else %}
+      <p class="auth-text">
+        当前已关闭 <code>Cf-Access-Authenticated-User-Email</code> 信任
+        （<code>QLIB_TRUST_CF_HEADER=0</code>），应用无法从请求中识别身份。
+      </p>
+    {% endif %}
+
+    {% if dev_email and dev_login_allowed %}
+      <p class="auth-hint">
+        本地开发模式：已设置 <code>QLIB_DEV_EMAIL={{ dev_email }}</code>，
+        正常请求会自动以该邮箱登录。若仍停留在此页，请检查该邮箱是否在
+        <code>QLIB_ADMIN_EMAIL</code> 中，或先用管理员生成邀请码。
+      </p>
+    {% elif dev_email %}
+      <p class="auth-hint">
+        检测到 <code>QLIB_DEV_EMAIL={{ dev_email }}</code>，但未开启
+        <code>QLIB_ALLOW_DEV_LOGIN</code>，开发身份不会生效。
+      </p>
+    {% endif %}
+
+    {% if not admin_configured %}
+      <p class="auth-warn">
+        尚未配置 <code>QLIB_ADMIN_EMAIL</code>。没有管理员就无法生成邀请码。
+        请在 <code>.env</code> 中设置你的邮箱后重启服务。
+      </p>
+    {% endif %}
+
+    <div class="auth-actions">
+      <a class="btn btn-primary" href="/">重新进入</a>
+    </div>
+    {% endif %}
+  </main>
+</body>
+</html>

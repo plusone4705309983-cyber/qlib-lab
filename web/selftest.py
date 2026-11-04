@@ -1,6 +1,15 @@
 ﻿"""不依赖 pytest 的自检:  python web/selftest.py"""
+import os
 import sys
+import tempfile
 from pathlib import Path
+
+# 自检直接调用 API，不需要 Cloudflare 身份；仅测试进程内生效。
+# 用户库放到临时目录，避免 selftest@local 污染真实 data/private/qlib_lab.db
+_SELFTEST_TMP = tempfile.mkdtemp(prefix="qlib_lab_selftest_")
+os.environ["QLIB_DB_PATH"] = str(Path(_SELFTEST_TMP) / "selftest.db")
+os.environ["QLIB_SECRET_KEY"] = "selftest-only-secret"
+os.environ["QLIB_AUTH_DISABLED"] = "1"
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))

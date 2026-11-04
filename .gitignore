@@ -68,6 +68,7 @@ bmp/
 # ---- 密钥与凭证 (保险起见, 永远不要提交) ----
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.pfx
@@ -77,6 +78,10 @@ id_rsa*
 
 # ---- 个人隐私数据 (持仓账本等, 只存本机) ----
 data/private/
+
+# ---- 模拟交易（Alpaca Paper）本地日志 ----
+data/private/broker_orders.json
+data/private/broker_state.json
 
 # ---- opencode 本地文件 ----
 # 会话 ID, 指向本机会话存储, 对外无意义

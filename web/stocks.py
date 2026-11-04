@@ -247,9 +247,17 @@ def _run_job(job_id: str, p: dict) -> None:
             CONFIG_PATH.write_text(backup, encoding="utf-8", newline="\n")
             raise
 
+        # 新股票自动进入发起人的自选；全局股票池仍然共享
+        try:
+            import db
+
+            db.add_watchlist(job["user_id"], market, qlib)
+        except Exception as exc:  # noqa: BLE001  自选写入失败不应让抓数任务回滚
+            log(f"警告: 已抓取成功，但加入自选失败: {exc}")
+
         job["result"] = {"market": market, "qlib": qlib, "name": p["name"], "rows": rows}
         job["status"] = "ok"
-        log("完成 ✓  (刷新页面即可看到新股票)")
+        log("完成 ✓  (已加入我的自选，刷新页面即可看到)")
     except Exception as exc:  # noqa: BLE001
         job["status"] = "error"
         job["error"] = str(exc)
@@ -262,7 +270,7 @@ def _run_job(job_id: str, p: dict) -> None:
             _active["running"] = False
 
 
-def start_add(payload: dict) -> dict:
+def start_add(payload: dict, user_id: int | None = None) -> dict:
     p = validate(payload)
     with _lock:
         if _active["running"]:
@@ -270,13 +278,19 @@ def start_add(payload: dict) -> dict:
         _active["running"] = True
         job_id = f"add-{int(time.time() * 1000)}"
         _jobs[job_id] = {"status": "running", "log": [], "done": False,
-                         "error": None, "result": None}
+                         "error": None, "result": None, "user_id": user_id}
     threading.Thread(target=_run_job, args=(job_id, p), daemon=True).start()
     return {"job_id": job_id}
 
 
-def get_job(job_id: str) -> dict | None:
-    return _jobs.get(job_id)
+def get_job(job_id: str, user_id: int | None = None) -> dict | None:
+    job = _jobs.get(job_id)
+    if job is None:
+        return None
+    # 任务只对发起人可见；user_id 为 None 的内部调用不限制
+    if user_id is not None and job.get("user_id") not in (None, user_id):
+        return None
+    return job
 
 
 def busy() -> bool:

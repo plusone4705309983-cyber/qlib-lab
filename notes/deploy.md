@@ -9,7 +9,7 @@
 
 ---
 
-## 0. 现状速查（2026-10-19 核实）
+## 0. 现状速查（2026-10-19 核实；2026-11-04 补充多用户 P0）
 
 | 项 | 值 | 说明 |
 |---|---|---|
@@ -20,6 +20,8 @@
 | 隧道外部路由 | `qlib.logoslab.cloud` Type HTTP → `http://localhost:8853` | 在 CF Zero Trust 后台看，**别乱动** |
 | SSL | Cloudflare 没有做 SSL-拉平（拉平值为空） | 只记录，不建议改 |
 | 后端日志 | `web\logs\app.log` | `run.bat` 重定向 waitress/Flask/loguru 全部输出 |
+| 用户库 | `data/private/qlib_lab.db` | SQLite：用户 / 邀请码 / 每人自选；已 gitignore |
+| 会话密钥 | `data/private/session_secret` | 未设 `QLIB_SECRET_KEY` 时自动生成；已 gitignore |
 | 真实数据 | `data/selfmade/{cn,us}/*.csv`（**CSV = 唯一事实来源**） | bin 由 CSV 确定性重建；bin 不进 git |
 | 原始缓存 | `data/_raw_cache/*.json` | **有意提交**，离线可复现 CSV |
 | Python | `%ROOT%\.venv\Scripts\python.exe` | `run.bat` 自动优先选 venv |
@@ -46,7 +48,7 @@ Invoke-WebRequest "http://127.0.0.1:8853/" -UseBasicParsing -TimeoutSec 30
 Invoke-WebRequest "https://qlib.logoslab.cloud/" -UseBasicParsing -TimeoutSec 60
 ```
 
-### 1.2 重启应用（**必须**，改完代码/静态资源必须重启）
+### 1.2 重启应用（**必须**，改完代码/静态资源/`.env` 必须重启）
 
 ```powershell
 # 1) 杀掉旧的 waitress/app.py 进程
@@ -75,7 +77,7 @@ sc.exe query Cloudflared
 
 ```powershell
 .venv\Scripts\python.exe web\selftest.py --timeout 300000
-# 期望全 PASS（2026-10-19 基线：56 PASS / 0 FAIL）
+# 期望全 PASS（2026-11-04 基线：108 PASS / 0 FAIL）
 ```
 
 ---
@@ -86,6 +88,9 @@ sc.exe query Cloudflared
 2. 跑 `web\selftest.py`（见 1.4）
 3. 重启应用（见 1.2）
 4. 公网抽查 `https://qlib.logoslab.cloud`
+
+> **多用户 P0 首次上线**：`.env` 配置、Cloudflare Access 策略、邀请码验收和回滚步骤
+> 见 [`notes/multiuser_p0_rollout.md`](multiuser_p0_rollout.md)。
 
 > GitHub push 在这台机器上**经常连接超时/被重置**，失败就隔几秒重试，通常 1~10 次内能成功。不做重试机制，手动重试即可。
 
@@ -118,4 +123,6 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 - **数据口径**：CSV 是后复权（HFQ）价，`volume` 是股数（A股已由手换算成股），`trade = price / factor`，`vwap` 也是后复权口径。qlib 里不要再除 `$factor`。
 - **别手改 bin**：一切从 CSV 重建。bin 在 `.gitignore` 里。
 - **`data/_raw_cache/` 有意提交**：保证离线可复现、审计数据来源，不要清理。
+- **多用户 P0**：生产环境必须设置 `QLIB_ADMIN_EMAIL`；不要设置 `QLIB_ALLOW_DEV_LOGIN` / `QLIB_DEV_EMAIL`；`QLIB_TRUST_CF_HEADER=1` 仅适用于应用只监听回环、流量必经 Cloudflare Tunnel 的部署。
+- **P0 权限边界**：P1（BYOK + 账本按用户隔离）完成前，模拟交易和持仓账本接口只对 admin 开放；普通用户仍可用行情、因子、信号和自己的「我的自选」。
 - 计划任务 `Qlib_App` 的触发器是"登录时"：机器重启后**必须有人登录**应用才会拉起（隧道服务是 AUTO_START，会自己起来，但没应用可转发就是 502）。

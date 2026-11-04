@@ -15,14 +15,26 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import broker_config  # noqa: E402,F401  先加载 .env，供 auth / db 读取 QLIB_* 配置
+import auth  # noqa: E402
+import db  # noqa: E402
 import stocks  # noqa: E402
 import view  # noqa: E402
 import portfolio  # noqa: E402
 
-from flask import Flask, Response, jsonify, render_template, request  # noqa: E402
+from flask import Flask, Response, jsonify, render_template, request, url_for  # noqa: E402
+from flask_login import current_user  # noqa: E402
 
 app = Flask(__name__)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+auth.init_app(app)
+
+app.add_url_rule("/login", "login_page", auth.login_page, methods=["GET"])
+app.add_url_rule("/invite", "invite_page", auth.invite_page, methods=["GET"])
+app.add_url_rule("/api/invite/redeem", "redeem_invite", auth.redeem_invite, methods=["POST"])
+app.add_url_rule("/logout", "logout", auth.logout, methods=["GET", "POST"])
+app.add_url_rule("/api/auth/me", "api_me", auth.api_me, methods=["GET"])
+
 
 
 @app.after_request
@@ -38,9 +50,102 @@ def index():
     return render_template("index.html")
 
 
+# ---------------------------------------------------------------- 自选股
+def _watchlist_catalog() -> list[dict]:
+    """当前用户自选股 + 行情元信息；顺序沿用 config/symbols.yaml。"""
+    keys = {(x["market"], x["symbol"]) for x in db.list_watchlist(current_user.id)}
+    return [s for s in view.catalog() if (s["market"], s["qlib"]) in keys]
+
+
 @app.get("/api/symbols")
 def api_symbols():
-    return jsonify(view.catalog())
+    """兼容旧前端：现在返回当前用户的自选股，而不是全局股票池。"""
+    return jsonify(_watchlist_catalog())
+
+
+@app.get("/api/catalog")
+def api_catalog():
+    """全量已下载标的，供「管理自选」挑选。"""
+    keys = {(x["market"], x["symbol"]) for x in db.list_watchlist(current_user.id)}
+    out = []
+    for s in view.catalog():
+        item = dict(s)
+        item["in_watchlist"] = (s["market"], s["qlib"]) in keys
+        out.append(item)
+    return jsonify(out)
+
+
+@app.get("/api/watchlist")
+def api_watchlist():
+    return jsonify({"symbols": _watchlist_catalog()})
+
+
+@app.post("/api/watchlist")
+def api_watchlist_add():
+    payload = request.get_json(silent=True) or {}
+    market = str(payload.get("market") or "").strip().lower()
+    symbol = str(payload.get("symbol") or "").strip().lower()
+    meta = view.find(market, symbol)
+    if meta is None:
+        return jsonify({"error": f"未配置的标的: {market}/{symbol}"}), 404
+    db.add_watchlist(current_user.id, meta["market"], meta["qlib"])
+    return jsonify({"ok": True, "symbols": _watchlist_catalog()})
+
+
+@app.delete("/api/watchlist/<market>/<symbol>")
+def api_watchlist_remove(market, symbol):
+    removed = db.remove_watchlist(current_user.id, market, symbol)
+    return jsonify({"ok": True, "removed": removed, "symbols": _watchlist_catalog()})
+
+
+# ---------------------------------------------------------------- 管理后台
+@app.get("/admin/invites")
+@auth.admin_required
+def admin_invites_page():
+    return render_template("admin_invites.html")
+
+
+@app.get("/api/admin/invites")
+@auth.admin_required
+def api_admin_invites():
+    return jsonify(
+        {
+            "invites": db.list_invites(),
+            "users": db.list_users(),
+            "quota": {
+                "window_hours": 24,
+                "max": 50,
+                "used": db.count_invites_since(current_user.id, 24),
+            },
+        }
+    )
+
+
+@app.post("/api/admin/invites")
+@auth.admin_required
+def api_admin_invite_create():
+    payload = request.get_json(silent=True) or {}
+    used = db.count_invites_since(current_user.id, 24)
+    if used >= 50:
+        return jsonify({"error": "24 小时内生成邀请码过多，请稍后再试"}), 429
+    try:
+        invite = db.create_invite(
+            current_user.id,
+            max_uses=payload.get("max_uses", 1),
+            expires_hours=payload.get("expires_hours", db.DEFAULT_INVITE_HOURS),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    link = url_for("invite_page", code=invite["code"], _external=True)
+    return jsonify({"invite": invite, "link": link})
+
+
+@app.delete("/api/admin/invites/<int:invite_id>")
+@auth.admin_required
+def api_admin_invite_revoke(invite_id):
+    if not db.revoke_invite(invite_id):
+        return jsonify({"error": "邀请码不存在"}), 404
+    return jsonify({"ok": True})
 
 
 @app.get("/api/kline")
@@ -188,6 +293,7 @@ def api_holder_stocks():
 
 
 @app.get("/api/positions")
+@auth.admin_required
 def api_positions():
     try:
         return jsonify(portfolio.list_positions())
@@ -196,6 +302,7 @@ def api_positions():
 
 
 @app.post("/api/positions")
+@auth.admin_required
 def api_positions_add():
     payload = request.get_json(silent=True) or {}
     try:
@@ -207,6 +314,7 @@ def api_positions_add():
 
 
 @app.patch("/api/positions/<pos_id>")
+@auth.admin_required
 def api_positions_patch(pos_id):
     payload = request.get_json(silent=True) or {}
     try:
@@ -220,6 +328,7 @@ def api_positions_patch(pos_id):
 
 
 @app.delete("/api/positions/<pos_id>")
+@auth.admin_required
 def api_positions_delete(pos_id):
     try:
         return jsonify(portfolio.delete_position(pos_id))
@@ -230,6 +339,7 @@ def api_positions_delete(pos_id):
 
 
 @app.delete("/api/positions/<pos_id>/lots/<lot_id>")
+@auth.admin_required
 def api_positions_delete_lot(pos_id, lot_id):
     try:
         return jsonify(portfolio.delete_lot(pos_id, lot_id))
@@ -240,6 +350,7 @@ def api_positions_delete_lot(pos_id, lot_id):
 
 
 @app.post("/api/positions/evaluate")
+@auth.admin_required
 def api_positions_evaluate():
     payload = request.get_json(silent=True) or {}
     ids = payload.get("ids")
@@ -267,6 +378,7 @@ def api_quote():
 
 @app.get("/api/positions/export")
 @app.get("/api/positions/export.csv")
+@auth.admin_required
 def api_positions_export():
     fmt = request.args.get("fmt", "json").lower()
     if fmt in ("csv", "xlsx"):
@@ -287,6 +399,187 @@ def api_positions_export():
     )
 
 
+# ---------------------------------------------------------------- 模拟交易（Alpaca Paper）
+@app.get("/api/broker/status")
+@auth.admin_required
+def api_broker_status():
+    try:
+        from broker_config import BrokerConfigError, config
+        from brokers import get_broker
+
+        config.require_paper()
+        broker = get_broker()
+        account = broker.get_account()
+        return jsonify({"configured": config.configured, "paper": True, "account": account, "config": config.summary()})
+    except BrokerConfigError as exc:
+        return jsonify({"error": str(exc), "configured": False}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/broker/positions")
+@auth.admin_required
+def api_broker_positions():
+    try:
+        from brokers import get_broker
+
+        return jsonify({"positions": get_broker().get_positions()})
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/broker/orders")
+@auth.admin_required
+def api_broker_orders():
+    try:
+        from brokers import get_broker
+
+        status = request.args.get("status")
+        limit = request.args.get("limit", 50)
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 50
+        return jsonify({"orders": get_broker().get_orders(status=status, limit=limit)})
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/broker/log")
+@auth.admin_required
+def api_broker_log():
+    try:
+        from brokers.orders_log import get_log
+
+        limit = request.args.get("limit", 30)
+        try:
+            limit = int(limit)
+        except Exception:
+            limit = 30
+        return jsonify({"log": get_log(limit)})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/broker/preview")
+@auth.admin_required
+def api_broker_preview():
+    payload = request.get_json(silent=True) or {}
+    symbol = str(payload.get("symbol") or "").strip().upper()
+    side = str(payload.get("side") or "buy").strip().lower()
+    qty = payload.get("qty")
+    notional = payload.get("notional")
+    if side not in ("buy", "sell"):
+        return jsonify({"error": "side 只能是 buy 或 sell"}), 400
+    if symbol == "":
+        return jsonify({"error": "缺少 symbol"}), 400
+    try:
+        from broker_config import BrokerConfigError, config
+        from brokers import get_broker
+
+        config.require_paper()
+        if not config.configured:
+            raise BrokerConfigError("缺少 Alpaca Paper 密钥：请在 .env 设置 APCA_API_KEY_ID / APCA_API_SECRET_KEY")
+        account = get_broker().get_account()
+        buying_power = account.get("buying_power")
+        cash = account.get("cash")
+        preview = {
+            "symbol": symbol,
+            "side": side,
+            "type": "market",
+            "time_in_force": "day",
+            "qty": qty,
+            "notional": notional,
+            "account": {"buying_power": buying_power, "cash": cash},
+        }
+        return jsonify({"preview": preview, "note": "市价单将在美股交易时段撮合，实际成交价可能与点击时价格略有偏差"})
+    except BrokerConfigError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/broker/order")
+@auth.admin_required
+def api_broker_order():
+    payload = request.get_json(silent=True) or {}
+    symbol = str(payload.get("symbol") or "").strip().upper()
+    side = str(payload.get("side") or "buy").strip().lower()
+    qty = payload.get("qty")
+    notional = payload.get("notional")
+    order_type = str(payload.get("type") or "market").strip().lower()
+    tif = str(payload.get("time_in_force") or "day").strip().lower()
+    if side not in ("buy", "sell"):
+        return jsonify({"error": "side 只能是 buy 或 sell"}), 400
+    if symbol == "":
+        return jsonify({"error": "缺少 symbol"}), 400
+    if order_type != "market":
+        return jsonify({"error": "MVP 仅支持市价单（type=market）"}), 400
+    if tif != "day":
+        return jsonify({"error": "MVP 仅支持 day（time_in_force=day）"}), 400
+    if qty is None and notional is None:
+        return jsonify({"error": "需提供 qty（股数）或 notional（金金额）"}), 400
+    try:
+        from brokers import get_broker
+        from brokers.orders_log import log_order
+
+        body = {"symbol": symbol, "side": side, "type": order_type, "time_in_force": tif}
+        if qty is not None:
+            # Alpaca 接受字符串或数字，尽量用数值但兼容
+            try:
+                body["qty"] = float(qty)
+            except Exception:
+                body["qty"] = qty
+        if notional is not None:
+            try:
+                body["notional"] = float(notional)
+            except Exception:
+                body["notional"] = notional
+        order = get_broker().place_order(body)
+        log_order({"action": "place_order", "body": body, "result": order})
+        return jsonify({"order": order})
+    except RuntimeError as exc:
+        try:
+            from brokers.orders_log import log_order
+
+            log_order({"action": "place_order_error", "body": payload, "error": str(exc)})
+        except Exception:
+            pass
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        try:
+            from brokers.orders_log import log_order
+
+            log_order({"action": "place_order_error", "body": payload, "error": str(exc)})
+        except Exception:
+            pass
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/broker/orders/<order_id>/cancel")
+@auth.admin_required
+def api_broker_cancel(order_id):
+    try:
+        from brokers import get_broker
+        from brokers.orders_log import log_order
+
+        res = get_broker().cancel_order(order_id)
+        log_order({"action": "cancel_order", "order_id": order_id, "result": res})
+        return jsonify({"result": res})
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.get("/healthz")
 def healthz():
     return "ok"
@@ -305,7 +598,7 @@ def api_search():
 def api_add_stock():
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify(stocks.start_add(payload))
+        return jsonify(stocks.start_add(payload, user_id=current_user.id))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except RuntimeError as exc:
@@ -314,7 +607,7 @@ def api_add_stock():
 
 @app.get("/api/job/<job_id>")
 def api_job(job_id):
-    job = stocks.get_job(job_id)
+    job = stocks.get_job(job_id, user_id=current_user.id)
     if job is None:
         return jsonify({"error": "无此任务"}), 404
     return jsonify(job)
@@ -333,6 +626,13 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=8853)
     ap.add_argument("--debug", action="store_true", help="用 Flask 调试服务器")
     args = ap.parse_args()
+
+    if not auth.admin_emails():
+        print("警告: 未配置 QLIB_ADMIN_EMAIL，无法自动创建管理员/生成邀请码。")
+    if auth.dev_login_allowed():
+        print(f"警告: 已开启本地开发登录 QLIB_DEV_EMAIL={auth.dev_email()}，生产环境请关闭。")
+    if auth.trust_cf_header() and args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("警告: 非回环监听且信任 Cf-Access Header，Header 可能被伪造！")
 
     if args.debug:
         app.run(host=args.host, port=args.port, debug=True)

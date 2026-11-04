@@ -7,18 +7,30 @@
 <meta name="format-detection" content="telephone=no">
 <title>Qlib 数据检视器</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/style.css?v=20261026e">
+<link rel="stylesheet" href="/static/style.css?v=20261103b">
 </head>
 <body>
 <header>
   <button id="nav-toggle" class="nav-toggle" title="显示/隐藏股票池">☰</button>
   <div class="brand">Qlib 数据检视器</div>
   <div class="brand-sub">data/selfmade · CSV 为数据本体 · 真实价 = $price / $factor</div>
+  <div class="spacer"></div>
+  <div class="user-box">
+    <span class="user-email" title="{{ current_user.email }}">{{ current_user.email }}</span>
+    {% if current_user.is_admin %}
+      <a class="user-link" href="/admin/invites">邀请码</a>
+    {% endif %}
+    <a class="user-link" href="/logout">退出</a>
+  </div>
 </header>
 
 <div class="layout">
   <aside class="sidebar" id="sidebar">
-    <div class="side-title" id="side-toggle">股票池 <span id="pool-count"></span><span class="chev">▾</span></div>
+    <div class="side-title" id="side-toggle">
+      <span>我的自选 <span id="pool-count"></span></span>
+      <button id="watch-manage" class="side-manage" title="管理我的自选">＋</button>
+      <span class="chev">▾</span>
+    </div>
     <div id="symbol-list" class="sym-list"></div>
   </aside>
 
@@ -84,6 +96,7 @@
       <div id="anom-table" class="anom-table"></div>
     </div>
 
+    {% if current_user.is_admin %}
     <div class="pos-wrap" id="pos-wrap">
       <div class="side-title">
         持仓账本 <span class="muted">买入成本 → 浮盈 / 止损止盈 / 因子转弱 · 数据只存本机</span>
@@ -161,6 +174,67 @@
 
       <div id="pos-table" class="bt-table pos-table"></div>
     </div>
+    {% else %}
+    <div class="pos-wrap" id="pos-locked">
+      <div class="side-title">
+        持仓账本 <span class="muted">P1 按用户隔离后开放</span>
+      </div>
+      <div class="pos-hint">
+        持仓账本目前只对管理员开放，避免 P1 完成前不同用户互相看到或修改同一份账本。
+      </div>
+    </div>
+    {% endif %}
+
+    {% if current_user.is_admin %}
+    <div class="broker-wrap" id="broker-wrap">
+      <div class="side-title">
+        模拟交易（Alpaca Paper） <span class="muted">手动确认 + 一键填单 · 仅连 paper-api.alpaca.markets · 仅管理员</span>
+      </div>
+      <div class="broker-bar">
+        <button id="broker-refresh" class="btn mini">刷新状态</button>
+        <span id="broker-status-text" class="muted">未配置（需 .env）</span>
+        <span class="spacer"></span>
+        <button id="broker-fill" class="btn btn-primary mini">从当前标的/信号一键预填</button>
+      </div>
+      <div id="broker-account" class="broker-account"></div>
+      <div class="broker-form">
+        <div class="broker-grid">
+          <label class="broker-field">标的
+            <input id="broker-symbol" placeholder="如 AAPL（美股）">
+          </label>
+          <label class="broker-field">方向
+            <select id="broker-side">
+              <option value="buy">买入（BUY）</option>
+              <option value="sell">卖出（SELL）</option>
+            </select>
+          </label>
+          <label class="broker-field">股数
+            <input id="broker-qty" type="number" step="1" min="1" placeholder="留空则用金额">
+          </label>
+          <label class="broker-field">金额（USD）
+            <input id="broker-notional" type="number" step="1" min="1" placeholder="如 1000">
+          </label>
+        </div>
+        <div class="broker-actions">
+          <button id="broker-preview" class="btn">预览订单</button>
+          <button id="broker-submit" class="btn btn-primary" disabled>确认发往 Alpaca Paper</button>
+          <span id="broker-hint" class="muted"></span>
+        </div>
+        <div id="broker-preview-box" class="broker-preview hidden"></div>
+      </div>
+      <div class="broker-lists">
+        <div class="broker-list">
+          <div class="broker-list-title">模拟盘持仓</div>
+          <div id="broker-positions" class="broker-table"></div>
+        </div>
+        <div class="broker-list">
+          <div class="broker-list-title">委托/订单</div>
+          <div id="broker-orders" class="broker-table"></div>
+        </div>
+      </div>
+      <div class="broker-note muted">仅支持美股市价单（day）。所有下单需手动预览并确认，不会自动下单。</div>
+    </div>
+    {% endif %}
 
     <div class="bt-wrap" id="bt-wrap" style="display:none">
       <div class="side-title">信号回测统计 <span class="muted">信号后 N 个交易日真实价收益 · 胜率=方向正确占比</span></div>
@@ -225,6 +299,23 @@
   </main>
 </div>
 
+<div id="watch-modal" class="modal-backdrop hidden">
+  <div class="modal watch-modal">
+    <div class="modal-head">
+      <span>管理我的自选</span>
+      <button id="watch-close" class="modal-x" title="关闭">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-row">
+        <input id="watch-filter" placeholder="筛选代码或名称，如 600519 / AAPL / 茅台">
+        <button id="watch-done" class="btn">完成</button>
+      </div>
+      <div class="watch-hint muted">从已下载的全量股票池中添加；添加后只出现在你的侧栏，不影响其他用户。</div>
+      <div id="watch-list" class="watch-list"></div>
+    </div>
+  </div>
+</div>
+
 <div id="modal" class="modal-backdrop hidden">
   <div class="modal">
     <div class="modal-head">
@@ -258,6 +349,6 @@
 </div>
 
 <script src="/static/vendor/echarts.min.js"></script>
-<script src="/static/app.js?v=20261026e"></script>
+<script src="/static/app.js?v=20261103b"></script>
 </body>
 </html>

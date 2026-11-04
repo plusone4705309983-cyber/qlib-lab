@@ -178,6 +178,53 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 - 写入前校验代码/名称/`secid` 格式；重名或 `secid` 已存在会拒绝；任一步失败自动回滚配置。
 - 美股腾讯代码按交易所自动加后缀（NASDAQ `.OQ` / NYSE `.N` / AMEX `.A`）。
 - 仅本机 `127.0.0.1` 监听，写入接口同样只经 Cloudflare Access 登录后方可访问。
+- 添加成功后，新股票会自动进入**发起人的「我的自选」**；`config/symbols.yaml` 仍是全局共享的数据目录。
+
+### 多用户 / 邀请码（P0）
+
+> 首次上线、Cloudflare Access 配置、邀请码验收和回滚步骤见
+> [`notes/multiuser_p0_rollout.md`](notes/multiuser_p0_rollout.md)。
+
+应用内身份以 Cloudflare Access 注入的 `Cf-Access-Authenticated-User-Email` 为准，
+首次进入时自动匹配 `users` 表；未准入的邮箱会被引导到邀请码页面。
+
+**首次启用：**
+
+1. 在 `.env` 设置 `QLIB_ADMIN_EMAIL=你的邮箱`，重启服务。
+2. 通过 Cloudflare Access 用该邮箱访问站点；应用会自动创建 admin 用户，
+   并把 `config/symbols.yaml` 里现有股票复制为你的自选（避免升级后侧栏空白）。
+3. 进入 `/admin/invites` 生成一次性邀请码，把链接发给朋友。
+4. 朋友先通过 Cloudflare 邮箱验证，再在 `/invite` 输入邀请码完成准入。
+
+**关键配置：**
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `QLIB_ADMIN_EMAIL` | 空 | 管理员邮箱，逗号分隔；为空时无法生成邀请码 |
+| `QLIB_TRUST_CF_HEADER` | `1` | 只在请求确实来自 Cloudflare Tunnel 时保持开启；直接暴露公网时必须设为 `0` |
+| `QLIB_ALLOW_DEV_LOGIN` | `0` | 本地开发用；与 `QLIB_DEV_EMAIL` 同时设置才会生效 |
+| `QLIB_DEV_EMAIL` | 空 | 本地模拟邮箱，生产环境不要设置 |
+| `QLIB_SECRET_KEY` | 自动生成 | 会话签名密钥；留空时写入 `data/private/session_secret` |
+
+**自选股隔离：**
+
+- 侧栏「我的自选」只显示当前用户 `user_watchlist` 里的标的；点标题右侧 `＋`
+  可从全量已下载股票池中添加/移出，也可在侧栏悬停后点 `×` 移出。
+- `/api/symbols` 现在返回**当前用户的自选**；`/api/catalog` 返回全量标的（带 `in_watchlist` 标记）。
+- 新增/移除接口：`POST /api/watchlist`、`DELETE /api/watchlist/<market>/<symbol>`。
+- 邀请码、用户列表仅 admin 可见；模拟交易接口在 P1（BYOK）完成前也**只对 admin 开放**，
+  避免朋友误用 `.env` 里的共享 Alpaca 密钥。
+- 持仓账本（`/api/positions*`）在 P1 按用户隔离完成前同样**只对 admin 开放**；
+  非管理员首页会显示「P1 后开放」的提示，避免互相看到或修改同一份账本。
+
+**数据位置：**
+
+- 用户 / 邀请码 / 自选：`data/private/qlib_lab.db`（SQLite，已 gitignore）。
+- 会话密钥：`data/private/session_secret`（已 gitignore）。
+
+> 注意：持仓账本底层仍是全局 `data/private/positions.json`，P1 会按用户隔离。
+> 在 P1 完成前，账本与模拟交易都只对 admin 开放；朋友仍可正常使用行情、因子、
+> 信号和各自的「我的自选」。
 
 ### 因子实验室（自定义表达式）
 
