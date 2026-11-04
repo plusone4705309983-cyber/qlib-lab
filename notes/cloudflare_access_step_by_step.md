@@ -107,8 +107,14 @@ Restart-Service Cloudflared
    - Subdomain：`qlib`
    - Domain：`logoslab.cloud`
    - Path：留空（推荐）或 `/*`
-6. Identity providers：勾选 `One-time PIN`。
+6. 如果界面有 `Identity providers` / `Authentication`，勾选 `One-time PIN`；
+   如果没有这一项，不用卡住，先保存应用，后面到
+   `Zero Trust` → `Settings` → `Authentication` 启用。
 7. 保存。
+
+> **注意：`One-time PIN` 不是 Access policy 里的选项。**
+> Policy 管的是“谁可以进”（Allow + Include Emails），
+> `One-time PIN` 管的是“用什么方式登录”（邮箱验证码），在 `Settings` → `Authentication` 里。
 
 注意：
 
@@ -127,6 +133,11 @@ Access 策略决定“谁可以登录”。先分清三种动作：
 | `Allow` | 允许登录，登录后应用能收到邮箱头 | ✅ 使用 |
 | `Bypass` | 完全跳过登录，**不会**有邮箱头 | ❌ 不要用 |
 | `Service Auth` | 给机器/脚本用的服务令牌 | ❌ 浏览器用户不用 |
+
+> **新手最容易混淆的地方：**
+> `Access policies` 里选的是“谁可以进”，不是“用什么方式登录”。
+> 第一次测试就选 `Allow` + `Include: Emails`，填管理员和测试朋友的邮箱。
+> `One-time PIN` 是登录方式，不在这里选，去 `Settings` → `Authentication` 启用。
 
 ### 方案 A：先小范围测试（推荐第一次上线）
 
