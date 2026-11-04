@@ -181,10 +181,19 @@ Access 策略决定“谁可以登录”。先分清三种动作：
 `Zero Trust` → `Settings` → `Authentication`
 （也可能在 `Access` → `Authentication`）
 
-1. 找到 `One-time PIN` / `OTP`。
+1. 找到 `One-time PIN` / `OTP` / `Email one-time PIN`。
 2. 打开开关。
 3. 保存。
 4. 如果使用 Google / GitHub 登录，也在这里配置；不配也可以，OTP 最简单。
+
+> **不要和 `Authenticator application` 混淆。**
+> `Authenticator application` 是 TOTP 验证器 App（Google Authenticator / Microsoft Authenticator 等），
+> 需要用户扫码绑定，不是邮箱验证码。
+> 你要找的是 `One-time PIN`，描述通常是“通过邮箱接收一次性验证码”。
+>
+> 如果列表里没有 `One-time PIN`，点 `Add new` / `Add an identity provider`，
+> 在内置登录方式里选择 `One-time PIN`。启用后，还要回到 Access 应用的
+> `Authentication` / `Identity providers` 里确认它被选中。
 
 测试：
 
