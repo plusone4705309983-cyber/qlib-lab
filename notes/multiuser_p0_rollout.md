@@ -4,6 +4,7 @@
 > 生产入口：`https://qlib.logoslab.cloud`
 > 应用：`127.0.0.1:8853`，计划任务 `Qlib_App`，隧道服务 `Cloudflared`。
 > 相关设计：`notes/multiuser_personal_space_invite_plan.md`。
+> Cloudflare 详细步骤：`notes/cloudflare_access_step_by_step.md`。
 
 ---
 
@@ -19,6 +20,30 @@
 | 持仓账本 | 全局共享 | **P1 前仅 admin**；朋友看到 P1 提示 |
 
 朋友在 P0 阶段仍可正常使用：行情 K 线、异常清单、信号回测、股东穿透、因子实验室，以及自己的「我的自选」。
+
+### 0.1 必须分两台机器吗？
+
+**不是必须。** P0 可以继续在一台机器上跑，但要区分“开发”和“生产”：
+
+| 方案 | 适合场景 | 做法 | 风险 |
+|---|---|---|---|
+| 单机 | 只有你自己维护、朋友很少、机器长期开机 | 生产跑 8853；开发预览跑 8854 + 临时 DB；改完先自检再重启 | 重启/改代码会影响正在使用的朋友；机器休眠/重启会中断 |
+| 双机（推荐长期） | 开始频繁改代码、朋友变多、希望稳定 | 开发机写代码；生产机只跑稳定分支/tag + Tunnel | 需要迁移数据和维护两台机器 |
+
+单机的最低要求：
+
+- 不要直接改正在被计划任务使用的代码；先在 8854 + 临时 DB 验证。
+- 不要同时启动两个抢 8853 的进程。
+- 改完 `.env` / 代码后，按第 6 节重启，并看日志。
+
+双机的基本原则：
+
+- **生产机**跑 `Cloudflared` + `Qlib_App`，只部署稳定分支或 tag。
+- **开发机**只在本机 `127.0.0.1:8854` 开发，不跑生产 Tunnel。
+- **不要在两台机器上同时运行同一个 Tunnel token**；同一个 tunnel 多个连接器会分流流量，可能把公网请求送到开发机。
+- 开发机如果要公网访问，另建一个 Tunnel 和 hostname（如 `qlib-dev.logoslab.cloud`），并单独建 Access 应用。
+
+结论：**P0 阶段可以先单机跑通；等朋友开始常用、或你需要频繁改代码时，再拆成两台机器。**
 
 ---
 
@@ -63,23 +88,19 @@ Get-ChildItem $backup
 
 ### 1.3 代码备份 / 提交
 
-当前改动都还未提交。先检查：
+本次 P0 代码已在 2026-11-04 提交并推送到 `origin/main`。以后改动仍建议先提交，再上线：
 
 ```powershell
 git status
 git diff --stat
-```
 
-确认无误后建议先提交，再上线：
-
-```powershell
 git add .gitignore .env.example README.md requirements.txt web notes
-git commit -m "feat(web): P0 multiuser auth + invite codes + per-user watchlist"
-git tag pre-p0-20261104
+git commit -m "feat(web): ..."
+git tag pre-deploy-$(Get-Date -Format yyyyMMdd)
 ```
 
-> `web/broker_config.py` 和 `web/brokers/` 是之前模拟交易的未提交文件。
-> 如果不确定是否要一起提交，先 `git add -p` 逐个确认，或暂时不要用 `git add web` 的整目录写法。
+> `web/broker_config.py` 和 `web/brokers/` 是模拟交易相关文件，已随 P0 一起提交。
+> 以后如果不想把某些文件带进提交，先 `git add -p` 逐个确认，不要无脑 `git add -A`。
 
 ---
 
@@ -236,37 +257,46 @@ Remove-Item Env:QLIB_DB_PATH, Env:QLIB_SECRET_KEY, Env:QLIB_ALLOW_DEV_LOGIN, Env
 
 ## 5. Cloudflare Zero Trust 配置
 
-### 5.1 推荐路径：先小范围，再放开
+Cloudflare 的完整逐步操作（含 Tunnel 检查、Access 应用、策略、OTP、测试、排查、回滚）
+已经单独写成：
 
-**第一次上线建议先保留邮箱白名单**，只把测试朋友的邮箱加进去。确认邀请码流程没问题后，再改成 `Everyone`。
+> **[`notes/cloudflare_access_step_by_step.md`](cloudflare_access_step_by_step.md)**
 
-#### 方案 A：保留白名单（更保守）
+这里只放最短路径：
 
-1. `Access` → `Applications` → `qlib-lab` → `Policies`。
-2. 如果当前 `Allow` 策略的 `Include` 是 `Emails`，保持 `Emails`；如果已经是 `Everyone`，先不动也可以。
-3. 使用 `Emails` 时，把测试朋友的邮箱加进去。
-4. 保存。
+### 5.1 第一次上线：先小范围
 
-朋友仍需要邀请码；白名单只是外层门禁。
+1. 确认 `Cloudflared` 服务运行，Tunnel 状态 `Healthy`。
+2. 确认 Tunnel 的 Public Hostname 是：
+   `qlib.logoslab.cloud` → `http://localhost:8853`。
+3. `Access` → `Applications` → `qlib-lab` → `Policies`。
+4. 先删掉/停用旧的 `Bypass` 或 `Allow Everyone`。
+5. 新建策略：
+   - Action: `Allow`
+   - Include: `Emails`
+   - 填入你的管理员邮箱 + 1 个测试朋友邮箱
+6. 确认 `Settings` → `Authentication` 已启用 `One-time PIN`。
+7. 用无痕窗口测试：管理员进首页，测试朋友进 `/invite`。
 
-#### 方案 B：改成 Everyone（方案设计的最终形态）
+### 5.2 确认没问题后：开放自助邀请
 
-1. `Access` → `Applications` → `qlib-lab` → `Policies`。
-2. 编辑 `Allow` 策略。
-3. `Include` 从 `Emails` 改为 `Everyone`。
-4. 保存。
-5. 确认 `Settings` → `Authentication` 里至少启用了 `One-time PIN`。
+1. 编辑 `Allow` 策略。
+2. 把 `Include` 从 `Emails` 改成 `Everyone`。
+3. 保存。
+4. 确认没有 `Bypass` 策略。
+5. 无痕窗口用另一个邮箱测试：应进入 `/invite`，没有邀请码看不到数据。
 
 > 改成 `Everyone` 后，任何能通过邮箱 OTP 的人都能到达应用，但**没有邀请码仍然看不到数据**。
 > 如果出问题，把 `Include` 改回原来的 `Emails` 列表即可回滚。
 
-### 5.2 不要动的东西
+### 5.3 不要动的东西
 
 - Tunnel 外部路由：`qlib.logoslab.cloud` → `http://localhost:8853`。
 - 应用监听地址：`127.0.0.1:8853`。
 - 不要把 8853 直接映射到公网。
+- 不要用 `Bypass` 策略；它会让 Flask 收不到邮箱头。
 
-### 5.3 预期结果
+### 5.4 预期结果
 
 | 访问者 | 预期 |
 |---|---|

@@ -182,8 +182,10 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 
 ### 多用户 / 邀请码（P0）
 
-> 首次上线、Cloudflare Access 配置、邀请码验收和回滚步骤见
+> 首次上线、邀请码验收和回滚步骤见
 > [`notes/multiuser_p0_rollout.md`](notes/multiuser_p0_rollout.md)。
+> Cloudflare Access 的逐步操作见
+> [`notes/cloudflare_access_step_by_step.md`](notes/cloudflare_access_step_by_step.md)。
 
 应用内身份以 Cloudflare Access 注入的 `Cf-Access-Authenticated-User-Email` 为准，
 首次进入时自动匹配 `users` 表；未准入的邮箱会被引导到邀请码页面。

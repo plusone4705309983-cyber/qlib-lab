@@ -89,8 +89,10 @@ sc.exe query Cloudflared
 3. 重启应用（见 1.2）
 4. 公网抽查 `https://qlib.logoslab.cloud`
 
-> **多用户 P0 首次上线**：`.env` 配置、Cloudflare Access 策略、邀请码验收和回滚步骤
+> **多用户 P0 首次上线**：`.env` 配置、邀请码验收和回滚步骤
 > 见 [`notes/multiuser_p0_rollout.md`](multiuser_p0_rollout.md)。
+> Cloudflare Access 的逐步操作见
+> [`notes/cloudflare_access_step_by_step.md`](cloudflare_access_step_by_step.md)。
 
 > GitHub push 在这台机器上**经常连接超时/被重置**，失败就隔几秒重试，通常 1~10 次内能成功。不做重试机制，手动重试即可。
 
