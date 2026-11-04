@@ -93,7 +93,7 @@ Restart-Service Cloudflared
 | Application domain | `qlib.logoslab.cloud` |
 | Path | 留空，或 `/*` |
 | Session duration | `24 hours` 或 `1 week` |
-| Identity providers | 至少勾选 `One-time PIN` |
+| Identity providers | 选中 `One-time PIN`（需先在 Integrations 里添加） |
 
 如果域名或路径不对，点 `Edit` 修正并保存。
 
@@ -107,14 +107,14 @@ Restart-Service Cloudflared
    - Subdomain：`qlib`
    - Domain：`logoslab.cloud`
    - Path：留空（推荐）或 `/*`
-6. 如果界面有 `Identity providers` / `Authentication`，勾选 `One-time PIN`；
-   如果没有这一项，不用卡住，先保存应用，后面到
-   `Zero Trust` → `Settings` → `Authentication` 启用。
-7. 保存。
+6. 先保存应用；`One-time PIN` 不在创建向导里时，去
+   `Zero Trust` → `Integrations` → `Identity providers` 添加（见第 5 节）。
+7. 添加后回到应用的 `Authentication` / `Identity providers`，选中 `One-time PIN`。
 
 > **注意：`One-time PIN` 不是 Access policy 里的选项。**
 > Policy 管的是“谁可以进”（Allow + Include Emails），
-> `One-time PIN` 管的是“用什么方式登录”（邮箱验证码），在 `Settings` → `Authentication` 里。
+> `One-time PIN` 管的是“用什么方式登录”（邮箱验证码），
+> 在 `Integrations` → `Identity providers` 里添加。
 
 注意：
 
@@ -137,7 +137,7 @@ Access 策略决定“谁可以登录”。先分清三种动作：
 > **新手最容易混淆的地方：**
 > `Access policies` 里选的是“谁可以进”，不是“用什么方式登录”。
 > 第一次测试就选 `Allow` + `Include: Emails`，填管理员和测试朋友的邮箱。
-> `One-time PIN` 是登录方式，不在这里选，去 `Settings` → `Authentication` 启用。
+> `One-time PIN` 是登录方式，不在这里选，去 `Integrations` → `Identity providers` 添加。
 
 ### 方案 A：先小范围测试（推荐第一次上线）
 
@@ -174,26 +174,36 @@ Access 策略决定“谁可以登录”。先分清三种动作：
 
 ---
 
-## 5. 启用 One-time PIN
+## 5. 添加 One-time PIN
 
-路径：
+**当前 Cloudflare One 界面的正确路径：**
 
-`Zero Trust` → `Settings` → `Authentication`
-（也可能在 `Access` → `Authentication`）
+```text
+Zero Trust → Integrations → Identity providers
+```
 
-1. 找到 `One-time PIN` / `OTP` / `Email one-time PIN`。
-2. 打开开关。
-3. 保存。
-4. 如果使用 Google / GitHub 登录，也在这里配置；不配也可以，OTP 最简单。
+不是 `Zero Trust → Settings`。`Settings` 里是 team domain、套餐、管理员权限等账户设置，
+不是登录方式。
+
+> 新版 Zero Trust 组织默认使用 `Cloudflare` 这个 identity provider，
+> `One-time PIN` **不会自动添加**，需要手动加一次。
+
+1. 左侧点 `Integrations`。
+2. 打开 `Identity providers`。
+3. 在 `Your identity providers` 下点 `Add new identity provider`。
+4. 在列表里选 `One-time PIN`。
+5. 名称可以填 `One-time PIN login`，保存。
+6. 回到 `Access controls` → `Applications` → `qlib-lab` → `Authentication`
+   （或 `Identity providers`），确认 `One-time PIN` 被选中。
+7. 保存应用。
 
 > **不要和 `Authenticator application` 混淆。**
 > `Authenticator application` 是 TOTP 验证器 App（Google Authenticator / Microsoft Authenticator 等），
 > 需要用户扫码绑定，不是邮箱验证码。
 > 你要找的是 `One-time PIN`，描述通常是“通过邮箱接收一次性验证码”。
 >
-> 如果列表里没有 `One-time PIN`，点 `Add new` / `Add an identity provider`，
-> 在内置登录方式里选择 `One-time PIN`。启用后，还要回到 Access 应用的
-> `Authentication` / `Identity providers` 里确认它被选中。
+> 旧版界面可能在 `Settings` → `Authentication` 下；如果当前界面左侧有
+> `Integrations`，就用 `Integrations` → `Identity providers`。
 
 测试：
 
@@ -211,7 +221,8 @@ Access 策略决定“谁可以登录”。先分清三种动作：
 
 - 检查垃圾邮件；
 - 确认邮箱拼写；
-- 确认 `One-time PIN` 已启用；
+- 确认 `One-time PIN` 已在 `Integrations` → `Identity providers` 添加；
+- 确认 Access 应用的 `Authentication` 里选中了它；
 - 换一个邮箱再试。
 
 ---
@@ -255,7 +266,8 @@ Cloudflare Access 的登录态和应用登录态是两层。测试新策略时�
 ### 7.2 一直回到 Cloudflare 登录页
 
 - 清除 cookie / 换无痕。
-- 检查 `One-time PIN` 是否启用。
+- 检查 `Integrations` → `Identity providers` 里是否已添加 `One-time PIN`。
+- 检查 Access 应用的 `Authentication` 里是否选中了它。
 - 检查 Access 应用是否保存。
 - 看 `Zero Trust` → `Logs` → `Access` 的请求记录。
 
@@ -333,7 +345,7 @@ Cloudflare Access 的登录态和应用登录态是两层。测试新策略时�
 - [ ] 策略动作 `Allow`
 - [ ] 方案 A：`Include: Emails` 包含管理员和测试朋友
 - [ ] 方案 B：`Include: Everyone`，且没有 `Bypass`
-- [ ] `One-time PIN` 已启用
+- [ ] `Integrations` → `Identity providers` 已添加 `One-time PIN`，应用里已选中
 - [ ] `QLIB_ADMIN_EMAIL` 与登录邮箱一致
 - [ ] `.env` 里 `QLIB_TRUST_CF_HEADER=1`
 - [ ] 生产没有 `QLIB_ALLOW_DEV_LOGIN` / `QLIB_DEV_EMAIL`

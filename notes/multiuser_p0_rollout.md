@@ -275,7 +275,8 @@ Cloudflare 的完整逐步操作（含 Tunnel 检查、Access 应用、策略、
    - Action: `Allow`
    - Include: `Emails`
    - 填入你的管理员邮箱 + 1 个测试朋友邮箱
-6. `One-time PIN` **不在 Policies 里**；到 `Settings` → `Authentication` 启用。
+6. `One-time PIN` **不在 Policies 里**；到 `Integrations` → `Identity providers`
+   添加，再回到应用的 `Authentication` 里选中。
 7. 用无痕窗口测试：管理员进首页，测试朋友进 `/invite`。
 
 ### 5.2 确认没问题后：开放自助邀请
