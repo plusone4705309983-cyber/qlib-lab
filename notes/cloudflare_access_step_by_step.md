@@ -219,11 +219,34 @@ Zero Trust → Integrations → Identity providers
 
 如果没收到验证码：
 
-- 检查垃圾邮件；
+- 检查垃圾邮件，发件人是 `noreply@notify.cloudflare.com`；
 - 确认邮箱拼写；
 - 确认 `One-time PIN` 已在 `Integrations` → `Identity providers` 添加；
 - 确认 Access 应用的 `Authentication` 里选中了它；
+- **确认这个邮箱在 Access 策略的 `Include: Emails` 里**。不在白名单时，Cloudflare 不会真的发信，但页面仍会提示“已发送”；
 - 换一个邮箱再试。
+
+### 5.1 两个不同的“码”，不要填错地方
+
+| 码 | 在哪里输入 | 格式 | 作用 |
+|---|---|---|---|
+| Cloudflare One-time PIN | Cloudflare 登录页 `Enter your code` | 6 位数字 | 通过 Cloudflare 门禁 |
+| qlib-lab 邀请码 | 应用自己的 `/invite` 页面 | `INV-XXXX-XXXX` | 创建应用内普通用户 |
+
+正确顺序：
+
+```text
+打开邀请链接
+  → Cloudflare 登录页：输入朋友邮箱
+  → 收到 6 位数字验证码
+  → 输入 6 位数字
+  → 跳回 qlib-lab
+  → 应用 /invite 页面：输入 INV-XXXX-XXXX
+  → 进入首页
+```
+
+> 不要把 `INV-XXXX-XXXX` 填到 Cloudflare 的 6 位数字框里；
+> 也不要把 Cloudflare 的 6 位数字填到应用邀请码框里。
 
 ---
 
@@ -294,10 +317,12 @@ Cloudflare Access 的登录态和应用登录态是两层。测试新策略时�
 - 有更早的 `Bypass` / `Allow Everyone` 策略覆盖。
 - 登录的邮箱和你以为的不一样（Google 账号可能是另一个邮箱）。
 
-### 7.5 邀请链接是 127.0.0.1
+### 7.5 邀请链接是 127.0.0.1 或 http
 
-- 你是从 `http://127.0.0.1:8853/admin/invites` 生成的。
-- 从 `https://qlib.logoslab.cloud/admin/invites` 重新生成。
+- 如果是 `127.0.0.1`：你是从本机后台生成的，改从
+  `https://qlib.logoslab.cloud/admin/invites` 重新生成。
+- 如果是 `http://qlib.logoslab.cloud/...`：手动把 `http://` 改成 `https://` 再发给朋友。
+  这是应用在 Tunnel 后面没有识别到 HTTPS 的小问题，不影响邀请码本身。
 
 ---
 
