@@ -11,54 +11,45 @@
 <body class="auth-body">
   <main class="auth-card">
     <div class="auth-brand">Qlib 数据检视器</div>
+
     {% if logged_out %}
-      <h1>已退出应用会话</h1>
-      <p class="auth-text">
-        Cloudflare Access 的邮箱验证仍然有效。点「重新进入」会再次自动登录；
-        若要完全退出，请同时清理 Cloudflare Access 会话或关闭浏览器。
-      </p>
-      <div class="auth-actions">
-        <a class="btn btn-primary" href="/">重新进入</a>
-      </div>
+      <h1>已退出登录</h1>
+      <p class="auth-text">应用会话已清除。需要重新进入时，请再次输入邮箱和密码。</p>
     {% else %}
-    <h1>未识别到访问身份</h1>
-
-    {% if trust_header %}
-      <p class="auth-text">
-        本站通过 <strong>Cloudflare Access</strong> 做外层门禁。请从 Cloudflare 验证过的入口访问；
-        如果你已经验证过邮箱，仍然看到这个页面，请联系管理员检查 Tunnel / Access 配置。
-      </p>
-    {% else %}
-      <p class="auth-text">
-        当前已关闭 <code>Cf-Access-Authenticated-User-Email</code> 信任
-        （<code>QLIB_TRUST_CF_HEADER=0</code>），应用无法从请求中识别身份。
-      </p>
+      <h1>登录</h1>
+      <p class="auth-text">使用管理员分配给你的邮箱和密码进入。没有账号请使用邀请链接注册。</p>
     {% endif %}
 
-    {% if dev_email and dev_login_allowed %}
-      <p class="auth-hint">
-        本地开发模式：已设置 <code>QLIB_DEV_EMAIL={{ dev_email }}</code>，
-        正常请求会自动以该邮箱登录。若仍停留在此页，请检查该邮箱是否在
-        <code>QLIB_ADMIN_EMAIL</code> 中，或先用管理员生成邀请码。
-      </p>
-    {% elif dev_email %}
-      <p class="auth-hint">
-        检测到 <code>QLIB_DEV_EMAIL={{ dev_email }}</code>，但未开启
-        <code>QLIB_ALLOW_DEV_LOGIN</code>，开发身份不会生效。
-      </p>
+    {% if error %}
+      <div class="auth-error" role="alert">{{ error }}</div>
     {% endif %}
+
+    <form class="auth-form" method="post" action="/login" autocomplete="on">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label for="login-email">邮箱</label>
+      <input id="login-email" name="email" type="email" value="{{ email }}"
+             autocomplete="username" placeholder="you@example.com" required autofocus>
+      <label for="login-password">密码</label>
+      <input id="login-password" name="password" type="password"
+             autocomplete="current-password" placeholder="至少 8 位" required>
+      <button class="btn btn-primary" type="submit">登录</button>
+    </form>
 
     {% if not admin_configured %}
       <p class="auth-warn">
         尚未配置 <code>QLIB_ADMIN_EMAIL</code>。没有管理员就无法生成邀请码。
-        请在 <code>.env</code> 中设置你的邮箱后重启服务。
+        请在 <code>.env</code> 中设置管理员邮箱后重启服务。
+      </p>
+    {% elif not admin_ready %}
+      <p class="auth-warn">
+        管理员还没有设置密码。请在 <code>.env</code> 中设置
+        <code>QLIB_ADMIN_PASSWORD</code> 后重启服务。
       </p>
     {% endif %}
 
-    <div class="auth-actions">
-      <a class="btn btn-primary" href="/">重新进入</a>
-    </div>
-    {% endif %}
+    <p class="auth-hint">
+      邀请链接里的邀请码一次性使用，默认 72 小时有效。忘记密码请联系管理员重置。
+    </p>
   </main>
 </body>
 </html>

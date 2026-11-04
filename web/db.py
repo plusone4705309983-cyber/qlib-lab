@@ -78,6 +78,7 @@ def init_db() -> None:
                               CHECK (role IN ('user', 'admin')),
                 status        TEXT NOT NULL DEFAULT 'active'
                               CHECK (status IN ('active', 'pending', 'disabled')),
+                password_hash TEXT,
                 created_at    TEXT NOT NULL,
                 last_login_at TEXT
             );
@@ -106,6 +107,10 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
             """
         )
+        # 兼容 P0 早期数据库：users 表最初没有 password_hash。
+        columns = {row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()}
+        if "password_hash" not in columns:
+            con.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
 
 
 # ---------------------------------------------------------------- 用户
@@ -134,7 +139,12 @@ def get_user_by_email(email: str) -> dict | None:
         )
 
 
-def create_user(email: str, role: str = "user", status: str = "active") -> dict:
+def create_user(
+    email: str,
+    role: str = "user",
+    status: str = "active",
+    password_hash: str | None = None,
+) -> dict:
     email = normalize_email(email)
     if not email or "@" not in email:
         raise ValueError("邮箱格式不正确")
@@ -144,10 +154,42 @@ def create_user(email: str, role: str = "user", status: str = "active") -> dict:
         raise ValueError("status 只能是 active/pending/disabled")
     with _connect() as con:
         cur = con.execute(
-            "INSERT INTO users (email, role, status, created_at) VALUES (?, ?, ?, ?)",
-            (email, role, status, now_iso()),
+            "INSERT INTO users (email, role, status, password_hash, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (email, role, status, password_hash, now_iso()),
         )
         return _user_dict(con.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
+
+
+def get_user_auth(email: str) -> dict | None:
+    """登录专用：返回包含 password_hash 的用户行，不要给模板/API 使用。"""
+    with _connect() as con:
+        row = con.execute(
+            "SELECT * FROM users WHERE email = ?", (normalize_email(email),)
+        ).fetchone()
+        if row is None:
+            return None
+        data = _user_dict(row) or {}
+        data["password_hash"] = row["password_hash"]
+        return data
+
+
+def set_password(user_id: int, password_hash: str) -> None:
+    if not password_hash:
+        raise ValueError("password_hash 不能为空")
+    with _connect() as con:
+        con.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (password_hash, int(user_id)),
+        )
+
+
+def has_admin_with_password() -> bool:
+    with _connect() as con:
+        row = con.execute(
+            "SELECT 1 FROM users WHERE role = 'admin' AND password_hash IS NOT NULL LIMIT 1"
+        ).fetchone()
+        return row is not None
 
 
 def touch_login(user_id: int) -> None:
@@ -286,14 +328,16 @@ def count_invites_since(user_id: int, hours: int = 24) -> int:
         return int(row["n"])
 
 
-def redeem_invite(code: str, email: str) -> dict:
+def redeem_invite(code: str, email: str, password_hash: str | None = None) -> dict:
     """核销邀请码并创建普通用户。失败抛 InviteError。"""
     code = (code or "").strip().upper()
     email = normalize_email(email)
     if not code:
         raise InviteError("请输入邀请码")
     if not email or "@" not in email:
-        raise InviteError("无法识别邮箱身份")
+        raise InviteError("邮箱格式不正确")
+    if not password_hash:
+        raise InviteError("请设置登录密码")
 
     con = _connect()
     try:
@@ -313,8 +357,9 @@ def redeem_invite(code: str, email: str) -> dict:
 
         now = now_iso()
         cur = con.execute(
-            "INSERT INTO users (email, role, status, created_at) VALUES (?, 'user', 'active', ?)",
-            (email, now),
+            "INSERT INTO users (email, role, status, password_hash, created_at)"
+            " VALUES (?, 'user', 'active', ?, ?)",
+            (email, password_hash, now),
         )
         user_id = cur.lastrowid
         con.execute(

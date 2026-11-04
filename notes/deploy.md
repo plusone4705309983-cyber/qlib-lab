@@ -76,6 +76,9 @@ sc.exe query Cloudflared
 ### 1.4 自检（发布前后各跑一遍）
 
 ```powershell
+.venv\Scripts\python.exe web\test_auth_local.py
+# 期望 31 PASS / 0 FAIL（应用内登录 / 邀请码 / 权限 / 自选隔离 / 限速 / Cookie）
+
 .venv\Scripts\python.exe web\selftest.py --timeout 300000
 # 期望全 PASS（2026-11-04 基线：108 PASS / 0 FAIL）
 ```
@@ -91,7 +94,7 @@ sc.exe query Cloudflared
 
 > **多用户 P0 首次上线**：`.env` 配置、邀请码验收和回滚步骤
 > 见 [`notes/multiuser_p0_rollout.md`](multiuser_p0_rollout.md)。
-> Cloudflare Access 的逐步操作见
+> Cloudflare 只保留 Tunnel 的操作见
 > [`notes/cloudflare_access_step_by_step.md`](cloudflare_access_step_by_step.md)。
 
 > GitHub push 在这台机器上**经常连接超时/被重置**，失败就隔几秒重试，通常 1~10 次内能成功。不做重试机制，手动重试即可。
@@ -125,6 +128,6 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 - **数据口径**：CSV 是后复权（HFQ）价，`volume` 是股数（A股已由手换算成股），`trade = price / factor`，`vwap` 也是后复权口径。qlib 里不要再除 `$factor`。
 - **别手改 bin**：一切从 CSV 重建。bin 在 `.gitignore` 里。
 - **`data/_raw_cache/` 有意提交**：保证离线可复现、审计数据来源，不要清理。
-- **多用户 P0**：生产环境必须设置 `QLIB_ADMIN_EMAIL`；不要设置 `QLIB_ALLOW_DEV_LOGIN` / `QLIB_DEV_EMAIL`；`QLIB_TRUST_CF_HEADER=1` 仅适用于应用只监听回环、流量必经 Cloudflare Tunnel 的部署。
+- **多用户 P0**：生产环境必须设置 `QLIB_ADMIN_EMAIL` 和 `QLIB_ADMIN_PASSWORD`；登录由应用自己负责，Cloudflare 只保留 Tunnel。生产 HTTPS 保持 `QLIB_COOKIE_SECURE=1`。
 - **P0 权限边界**：P1（BYOK + 账本按用户隔离）完成前，模拟交易和持仓账本接口只对 admin 开放；普通用户仍可用行情、因子、信号和自己的「我的自选」。
 - 计划任务 `Qlib_App` 的触发器是"登录时"：机器重启后**必须有人登录**应用才会拉起（隧道服务是 AUTO_START，会自己起来，但没应用可转发就是 502）。

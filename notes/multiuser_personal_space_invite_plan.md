@@ -1,7 +1,11 @@
 # 每用户个人空间 + 邀请码准入方案
 
+> **状态：历史设计稿。** P0 最终采用**应用内邮箱 + 密码登录**，Cloudflare 只保留 Tunnel；
+> 本文中依赖 Cloudflare Access 邮箱 OTP / `Cf-Access-Authenticated-User-Email` 的部分已不适用。
+> 当前实施与验收见 [`multiuser_p0_rollout.md`](multiuser_p0_rollout.md)。
+
 > 目标：让 `qlib-lab` 从「单用户全局工具」过渡到「小圈子多租户」。
-> 核心思路：**门禁（Cloudflare Zero Trust） + 应用内准入（邀请码） + 按用户隔离数据**。
+> 核心思路：**应用内登录 + 邀请码准入 + 按用户隔离数据**。
 
 ## 1. 背景与问题
 

@@ -1,395 +1,143 @@
-# Cloudflare Access 配置手册（qlib-lab 多用户 P0）
+# Cloudflare 只保留 Tunnel（不再使用 Access）
 
-> 目标：让 `https://qlib.logoslab.cloud` 在到达 Flask 之前先经过 Cloudflare 登录，
-> 并把登录邮箱通过 `Cf-Access-Authenticated-User-Email` 请求头传给应用。
->
-> 适用环境：Windows + Cloudflare Tunnel + 自托管 Flask。
-> 后台入口可能叫 **Zero Trust**，也可能叫 **Cloudflare One**；不同时间 UI 文案会略有变化，认准关键词即可。
+> 本文件替代旧的 Cloudflare Access 配置手册。
+> 从应用内登录上线后，Cloudflare 只负责 HTTPS 转发；登录由 Flask 自己做。
 
 ---
 
-## 0. 先理解三个东西
+## 1. 目标架构
 
 ```text
 浏览器
-  │ 1. 访问 https://qlib.logoslab.cloud
+  │ https://qlib.logoslab.cloud
   ▼
-Cloudflare Access（登录页）
-  │ 2. 邮箱 OTP / Google / GitHub 登录
+Cloudflare Tunnel
+  │ http://localhost:8853
   ▼
-Cloudflare 边缘
-  │ 3. 加上 Cf-Access-Authenticated-User-Email 请求头
-  ▼
-Cloudflare Tunnel（cloudflared，本机主动出站连接）
-  │ 4. 转发到 http://localhost:8853
-  ▼
-Flask 应用（读请求头，决定 admin / 普通用户 / 邀请页）
+Flask 应用
+  └─ 邮箱 + 密码 + 邀请码
 ```
 
-- **域名 / DNS**：`qlib.logoslab.cloud` 由 Cloudflare 管理。
-- **Tunnel**：本机 Windows 服务 `Cloudflared` 主动连 Cloudflare，不需要公网 IP / 80 / 443。
-- **Access**：Cloudflare 的“门禁”，负责登录；登录成功后把邮箱放进请求头。
-- **应用**：Flask 只信任这个请求头（`QLIB_TRUST_CF_HEADER=1`），不自己存密码。
+Cloudflare 侧只需要：
 
-**最重要的一句话**：
+- 一个 Tunnel；
+- 一个公网 hostname；
+- 一条到 `http://localhost:8853` 的路由。
 
-> 如果 Access 没有覆盖 `qlib.logoslab.cloud`，或者策略用了 `Bypass`，
-> Flask 就收不到邮箱头，页面会显示“未识别到访问身份”。
+不需要：
 
----
-
-## 1. 登录 Cloudflare 后台
-
-1. 打开 <https://dash.cloudflare.com/>。
-2. 用你的 Cloudflare 账号登录。
-3. 如果账号下有多个域名，先点 `logoslab.cloud`。
-4. 打开 <https://one.dash.cloudflare.com/>（Zero Trust / Cloudflare One）。
-5. 如果第一次进要求设置 team name，使用现有的；不要为了这次改动新建第二个组织。
+- Access 应用；
+- Access 策略；
+- One-time PIN；
+- 邮箱验证码；
+- Gmail / Google 账号。
 
 ---
 
-## 2. 检查 Tunnel 是否正常（只检查，不要改）
+## 2. 保留 Tunnel
 
-路径：
+进入 Cloudflare Zero Trust：
 
-`Zero Trust` → `Networks` → `Tunnels`
-（也可能在 `Cloudflare One` → `Networks` → `Tunnels`）
+```text
+Networks → Tunnels
+```
 
-你要看到：
+确认原来的 Tunnel 仍在运行，且 Public Hostname 是：
 
-- 有一个隧道，状态是 `Healthy` / `Connected`。
-- 点进去，`Public Hostname` 里有：
-  - **Hostname**：`qlib.logoslab.cloud`
-  - **Service**：`http://localhost:8853`（或 `http://127.0.0.1:8853`）
-- **不要改**这里的域名和端口。
-- **不要**手动加 A 记录；Tunnel 的 Public Hostname 会自动管理 DNS。
+```text
+qlib.logoslab.cloud  →  http://localhost:8853
+```
 
-如果 Tunnel 不是 Healthy：
+不要改成本机的公网 IP，也不要把 8853 直接暴露到公网。
+
+本机检查：
 
 ```powershell
 Get-Service Cloudflared
-Restart-Service Cloudflared
+Invoke-WebRequest http://127.0.0.1:8853/healthz -UseBasicParsing
 ```
 
-- token 在 `C:\ProgramData\cloudflared\token`，不要外传、不要提交 git。
-- 如果服务启动失败，先看 Windows 服务日志；不要先改 Access。
-
 ---
 
-## 3. 找到或创建 Access 应用
+## 3. 删除或禁用 Access 应用
 
-路径：
-
-`Zero Trust` → `Access` → `Applications`
-（也可能在 `Access controls` → `Applications`）
-
-### 3.1 如果已经有 `qlib-lab` / `qlib.logoslab.cloud`
-
-点进去，逐项检查：
-
-| 项目 | 建议值 |
-|---|---|
-| Application name | `qlib-lab` |
-| Application domain | `qlib.logoslab.cloud` |
-| Path | 留空，或 `/*` |
-| Session duration | `24 hours` 或 `1 week` |
-| Identity providers | 选中 `One-time PIN`（需先在 Integrations 里添加） |
-
-如果域名或路径不对，点 `Edit` 修正并保存。
-
-### 3.2 如果没有，创建 Self-hosted 应用
-
-1. `Applications` → `Add an application`。
-2. 选 **Self-hosted**。
-3. Application name：`qlib-lab`。
-4. Session duration：`24 hours`。
-5. Application domain：
-   - Subdomain：`qlib`
-   - Domain：`logoslab.cloud`
-   - Path：留空（推荐）或 `/*`
-6. 先保存应用；`One-time PIN` 不在创建向导里时，去
-   `Zero Trust` → `Integrations` → `Identity providers` 添加（见第 5 节）。
-7. 添加后回到应用的 `Authentication` / `Identity providers`，选中 `One-time PIN`。
-
-> **注意：`One-time PIN` 不是 Access policy 里的选项。**
-> Policy 管的是“谁可以进”（Allow + Include Emails），
-> `One-time PIN` 管的是“用什么方式登录”（邮箱验证码），
-> 在 `Integrations` → `Identity providers` 里添加。
-
-注意：
-
-- 不要选 `SaaS`；qlib-lab 是自托管应用。
-- 路径不要只写 `/admin`，否则首页可能不受保护。
-- 应用保存后，状态应是 `Saved` / `Published`。
-
----
-
-## 4. 配置 Access 策略
-
-Access 策略决定“谁可以登录”。先分清三种动作：
-
-| 动作 | 含义 | qlib-lab 是否使用 |
-|---|---|---|
-| `Allow` | 允许登录，登录后应用能收到邮箱头 | ✅ 使用 |
-| `Bypass` | 完全跳过登录，**不会**有邮箱头 | ❌ 不要用 |
-| `Service Auth` | 给机器/脚本用的服务令牌 | ❌ 浏览器用户不用 |
-
-> **新手最容易混淆的地方：**
-> `Access policies` 里选的是“谁可以进”，不是“用什么方式登录”。
-> 第一次测试就选 `Allow` + `Include: Emails`，填管理员和测试朋友的邮箱。
-> `One-time PIN` 是登录方式，不在这里选，去 `Integrations` → `Identity providers` 添加。
-
-### 方案 A：先小范围测试（推荐第一次上线）
-
-只允许管理员和 1 个测试朋友。
-
-1. 进入应用 → `Policies`。
-2. 如果已有 `Allow Everyone` 或 `Bypass` 策略，**先删除或停用**；否则它们会覆盖白名单。
-3. `Add a policy`：
-   - Policy name：`allow-admin-and-testers`
-   - Action：`Allow`
-   - Include：`Emails`
-   - 邮箱框里填：
-     ```text
-     你的管理员邮箱@example.com
-     测试朋友邮箱@example.com
-     ```
-   - 保存。
-4. 确认应用已保存/发布。
-
-### 方案 B：开放给朋友自助邀请（最终形态）
-
-1. 进入应用 → `Policies`。
-2. 删除/停用旧的 `Bypass` 和旧的 `Allow Everyone`，避免重复。
-3. `Add a policy`：
-   - Policy name：`allow-everyone`
-   - Action：`Allow`
-   - Include：`Everyone`
-   - 保存。
-4. 确认 `One-time PIN` 已启用（见第 5 节）。
-
-> `Everyone` 不是“没有登录”。它表示“任何能通过你启用的身份验证方式登录的人”。
-> 如果只启用 One-time PIN，就是任何有邮箱的人都能请求验证码。
-> 应用层的邀请码仍然是第二道门：没有邀请码只能到 `/invite`，看不到数据。
-
----
-
-## 5. 添加 One-time PIN
-
-**当前 Cloudflare One 界面的正确路径：**
+进入：
 
 ```text
-Zero Trust → Integrations → Identity providers
+Access → Applications
 ```
 
-不是 `Zero Trust → Settings`。`Settings` 里是 team domain、套餐、管理员权限等账户设置，
-不是登录方式。
+找到 `qlib-lab`（或绑定 `qlib.logoslab.cloud` 的那个应用）：
 
-> 新版 Zero Trust 组织默认使用 `Cloudflare` 这个 identity provider，
-> `One-time PIN` **不会自动添加**，需要手动加一次。
+- **推荐**：删除；
+- 或者：把策略改成 `Bypass`。
 
-1. 左侧点 `Integrations`。
-2. 打开 `Identity providers`。
-3. 在 `Your identity providers` 下点 `Add new identity provider`。
-4. 在列表里选 `One-time PIN`。
-5. 名称可以填 `One-time PIN login`，保存。
-6. 回到 `Access controls` → `Applications` → `qlib-lab` → `Authentication`
-   （或 `Identity providers`），确认 `One-time PIN` 被选中。
-7. 保存应用。
+### 为什么必须处理
 
-> **不要和 `Authenticator application` 混淆。**
-> `Authenticator application` 是 TOTP 验证器 App（Google Authenticator / Microsoft Authenticator 等），
-> 需要用户扫码绑定，不是邮箱验证码。
-> 你要找的是 `One-time PIN`，描述通常是“通过邮箱接收一次性验证码”。
->
-> 旧版界面可能在 `Settings` → `Authentication` 下；如果当前界面左侧有
-> `Integrations`，就用 `Integrations` → `Identity providers`。
+如果保留 `Allow + 邮箱 OTP`：
 
-测试：
+1. 朋友打开站点；
+2. 先被 Cloudflare 要求收 6 位验证码；
+3. 大陆网络下 Gmail 经常收不到；
+4. 即使收到，也只是到了应用登录页，还要再输入应用密码。
 
-1. 打开**无痕窗口**。
-2. 访问 `https://qlib.logoslab.cloud`。
-3. 应出现 Cloudflare 登录页。
-4. 输入邮箱，点发送验证码。
-5. 收邮件，输入验证码（位数以邮件为准）。
-6. 登录后：
-   - 管理员邮箱 → 应用首页；
-   - 未邀请邮箱 → 应用 `/invite`；
-   - 不在白名单（方案 A）→ Cloudflare 拒绝页。
+两套登录叠加，既慢又容易失败。P0 不需要它。
 
-如果没收到验证码：
+### 删除 Access 后安全吗
 
-- 检查垃圾邮件，发件人是 `noreply@notify.cloudflare.com`；
-- 确认邮箱拼写；
-- 确认 `One-time PIN` 已在 `Integrations` → `Identity providers` 添加；
-- 确认 Access 应用的 `Authentication` 里选中了它；
-- **确认这个邮箱在 Access 策略的 `Include: Emails` 里**。不在白名单时，Cloudflare 不会真的发信，但页面仍会提示“已发送”；
-- 换一个邮箱再试。
+安全边界变成：
 
-### 5.1 两个不同的“码”，不要填错地方
+- Cloudflare Tunnel 隐藏源站 IP；
+- HTTPS 由 Cloudflare 提供；
+- 应用自己校验邮箱 + 密码；
+- 密码只存哈希；
+- 登录失败有限速；
+- 邀请码一次性；
+- admin 路由和持仓/模拟交易接口有权限校验。
 
-| 码 | 在哪里输入 | 格式 | 作用 |
-|---|---|---|---|
-| Cloudflare One-time PIN | Cloudflare 登录页 `Enter your code` | 6 位数字 | 通过 Cloudflare 门禁 |
-| qlib-lab 邀请码 | 应用自己的 `/invite` 页面 | `INV-XXXX-XXXX` | 创建应用内普通用户 |
+对 P0 的小范围朋友使用足够。后续如果需要更强的企业级门禁，再单独评估。
 
-正确顺序：
+---
+
+## 4. 验证
+
+删除 Access 应用后，用无痕窗口打开：
 
 ```text
-打开邀请链接
-  → Cloudflare 登录页：输入朋友邮箱
-  → 收到 6 位数字验证码
-  → 输入 6 位数字
-  → 跳回 qlib-lab
-  → 应用 /invite 页面：输入 INV-XXXX-XXXX
-  → 进入首页
+https://qlib.logoslab.cloud/login
 ```
 
-> 不要把 `INV-XXXX-XXXX` 填到 Cloudflare 的 6 位数字框里；
-> 也不要把 Cloudflare 的 6 位数字填到应用邀请码框里。
+预期：
+
+- 直接看到应用登录页；
+- 不再出现 Cloudflare 邮箱验证码；
+- 输入管理员邮箱 + 密码能进入；
+- `/admin/invites` 能打开；
+- 普通用户访问 `/admin/invites`、`/api/positions`、`/api/broker/status` 返回 403。
 
 ---
 
-## 6. 测试矩阵
+## 5. 常见问题
 
-| 测试 | 操作 | 预期 |
+| 现象 | 原因 | 处理 |
 |---|---|---|
-| Tunnel | 打开 `https://qlib.logoslab.cloud` | 出现 Cloudflare 登录页，不是 502 |
-| 管理员 | 用 `QLIB_ADMIN_EMAIL` 邮箱登录 | 进入首页，右上角显示邮箱 |
-| 未邀请朋友（Everyone） | 用另一个邮箱登录 | 跳到 `/invite` |
-| 白名单外（方案 A） | 用未列出的邮箱登录 | Cloudflare 拒绝 |
-| 邀请码 | 输入管理员生成的码 | 进入首页，侧栏为空 |
-| 普通用户权限 | 访问 `/admin/invites` | 403 |
-| 普通用户交易 | 访问 `/api/positions` | 403 |
-| 邀请链接 | 从公网后台复制 | 域名是 `https://qlib.logoslab.cloud/...`，不是 `127.0.0.1` |
-
-### 清除旧登录态
-
-Cloudflare Access 的登录态和应用登录态是两层。测试新策略时：
-
-- 用无痕窗口；或
-- 访问 `https://qlib.logoslab.cloud/cdn-cgi/access/logout` 退出 Access；或
-- 清除 `qlib.logoslab.cloud` 的 cookie。
+| 仍然跳 Cloudflare 登录 | Access 应用没删干净 | 检查 Applications 里是否还有覆盖该域名的应用 |
+| 502 Bad Gateway | Tunnel 或应用没起来 | 检查 `Cloudflared`、`Qlib_App`、`web\logs\app.log` |
+| 登录后马上跳回 `/login` | 本机用 http 但 `QLIB_COOKIE_SECURE=1` | 本机调试临时设 `0`；生产保持 `1` |
+| 管理员密码错误 | `.env` 密码与数据库不一致 | 用 `web\set_password.py` 重置 |
+| 邀请码无效 | 已使用/过期/输错 | 在 `/admin/invites` 重新生成 |
 
 ---
 
-## 7. 排查
+## 6. 可选：保留 Access 但设 Bypass
 
-### 7.1 Cloudflare 登录成功，但应用显示“未识别到访问身份”
+如果暂时不想删除应用，可以把策略改成：
 
-按顺序检查：
+```text
+Action: Bypass
+Include: Everyone
+```
 
-1. Access 应用的域名是不是 `qlib.logoslab.cloud`，路径是不是空或 `/*`。
-2. 策略动作是不是 `Allow`，不是 `Bypass`。
-3. 应用 `.env` 是不是 `QLIB_TRUST_CF_HEADER=1`。
-4. 改完 `.env` 后有没有重启应用。
-5. 你是不是直接访问了 `http://127.0.0.1:8853`（本机直连没有 CF 头）。
-6. 看 `web\logs\app.log` 是否有启动警告。
+效果是 Cloudflare 不再要求登录，请求直接到 Flask。
 
-### 7.2 一直回到 Cloudflare 登录页
-
-- 清除 cookie / 换无痕。
-- 检查 `Integrations` → `Identity providers` 里是否已添加 `One-time PIN`。
-- 检查 Access 应用的 `Authentication` 里是否选中了它。
-- 检查 Access 应用是否保存。
-- 看 `Zero Trust` → `Logs` → `Access` 的请求记录。
-
-### 7.3 502 Bad Gateway
-
-- 应用没启动：`Get-Content web\logs\app.log -Tail 60`。
-- 端口不对：Tunnel 的 Service 应是 `http://localhost:8853`。
-- 应用没监听：
-
-  ```powershell
-  curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8853/healthz
-  ```
-
-- 计划任务没拉起：
-
-  ```powershell
-  schtasks /Run /TN Qlib_App
-  ```
-
-### 7.4 Cloudflare 显示 Access denied
-
-- 邮箱不在 `Include` 列表（方案 A）。
-- 策略没保存。
-- 有更早的 `Bypass` / `Allow Everyone` 策略覆盖。
-- 登录的邮箱和你以为的不一样（Google 账号可能是另一个邮箱）。
-
-### 7.5 邀请链接是 127.0.0.1 或 http
-
-- 如果是 `127.0.0.1`：你是从本机后台生成的，改从
-  `https://qlib.logoslab.cloud/admin/invites` 重新生成。
-- 如果是 `http://qlib.logoslab.cloud/...`：手动把 `http://` 改成 `https://` 再发给朋友。
-  这是应用在 Tunnel 后面没有识别到 HTTPS 的小问题，不影响邀请码本身。
-
----
-
-## 8. 回滚
-
-1. `Access` → `Applications` → `qlib-lab` → `Policies`。
-2. 把策略改回原来的邮箱列表；或删除 `allow-everyone`，恢复 `allow-admin-and-testers`。
-3. 保存。
-4. 用无痕窗口验证。
-5. 不需要停 Tunnel，也不需要改 DNS。
-
-如果只是想临时关闭 Access：
-
-- **不建议直接删应用**。删了应用，Flask 收不到邮箱头，所有人会看到“未识别到访问身份”。
-- 正确做法是恢复策略，而不是删应用。
-
----
-
-## 9. 双机部署时怎么配
-
-### 9.1 单机（当前）
-
-- 生产应用和 Tunnel 都在同一台 Windows。
-- 开发预览用另一个端口（如 8854）+ 临时 DB，不要和 8853 共用。
-- 不要让开发进程和计划任务抢 8853。
-
-### 9.2 双机（推荐长期）
-
-- **生产机**：跑 `Cloudflared` + `Qlib_App`，只跑稳定分支 / tag。
-- **开发机**：只在本机 `127.0.0.1:8854` 开发，不跑生产 Tunnel。
-- **不要在两台机器上同时运行同一个 Tunnel token**；同一个 tunnel 多个连接器会分流流量，可能把请求送到开发机。
-- 如果开发机也要公网访问，创建**另一个** Tunnel 和**另一个** hostname，例如
-  `qlib-dev.logoslab.cloud`，并单独建 Access 应用。
-- 生产数据迁移：复制 `config/symbols.yaml`、`data/selfmade`、`data/_raw_cache`、
-  `data/private`（`positions.json`、`qlib_lab.db`、`session_secret`）和 `.env` 到新机器；
-  或只迁移行情数据，用户库重新开始。
-
----
-
-## 10. 上线检查清单
-
-- [ ] `Cloudflared` 服务运行，Tunnel `Healthy`
-- [ ] Public Hostname `qlib.logoslab.cloud` → `http://localhost:8853`
-- [ ] Access 应用域名 `qlib.logoslab.cloud`，路径空或 `/*`
-- [ ] 策略动作 `Allow`
-- [ ] 方案 A：`Include: Emails` 包含管理员和测试朋友
-- [ ] 方案 B：`Include: Everyone`，且没有 `Bypass`
-- [ ] `Integrations` → `Identity providers` 已添加 `One-time PIN`，应用里已选中
-- [ ] `QLIB_ADMIN_EMAIL` 与登录邮箱一致
-- [ ] `.env` 里 `QLIB_TRUST_CF_HEADER=1`
-- [ ] 生产没有 `QLIB_ALLOW_DEV_LOGIN` / `QLIB_DEV_EMAIL`
-- [ ] 无痕窗口测试管理员和普通用户
-- [ ] 邀请链接从公网后台生成
-- [ ] 应用日志无启动警告
-
----
-
-## 11. 名词速查
-
-| 名词 | 说明 |
-|---|---|
-| Zero Trust / Cloudflare One | Cloudflare 的访问控制后台 |
-| Access Application | 保护某个域名的“应用”配置 |
-| Policy | 谁可以登录、允许还是绕过 |
-| Include | 策略里的“包含条件”，如 Emails / Everyone |
-| One-time PIN | 邮箱一次性验证码登录 |
-| Tunnel | 本机 `cloudflared` 到 Cloudflare 的出站连接 |
-| Public Hostname | Tunnel 暴露给公网的域名和本地服务 |
-| `Cf-Access-Authenticated-User-Email` | Cloudflare 登录后注入的邮箱请求头 |
-| Bypass | 跳过登录，不会有邮箱头；qlib-lab 不要用 |
+但更推荐删除，避免以后忘记这条 Bypass 策略，也避免误以为 Cloudflare 还在做登录保护。

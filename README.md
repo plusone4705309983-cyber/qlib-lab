@@ -177,36 +177,59 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 
 - 写入前校验代码/名称/`secid` 格式；重名或 `secid` 已存在会拒绝；任一步失败自动回滚配置。
 - 美股腾讯代码按交易所自动加后缀（NASDAQ `.OQ` / NYSE `.N` / AMEX `.A`）。
-- 仅本机 `127.0.0.1` 监听，写入接口同样只经 Cloudflare Access 登录后方可访问。
+- 仅本机 `127.0.0.1` 监听；公网 HTTPS 由 Cloudflare Tunnel 转发，登录由应用自己负责。
 - 添加成功后，新股票会自动进入**发起人的「我的自选」**；`config/symbols.yaml` 仍是全局共享的数据目录。
 
 ### 多用户 / 邀请码（P0）
 
 > 首次上线、邀请码验收和回滚步骤见
 > [`notes/multiuser_p0_rollout.md`](notes/multiuser_p0_rollout.md)。
-> Cloudflare Access 的逐步操作见
+> Cloudflare 只保留 Tunnel 的操作见
 > [`notes/cloudflare_access_step_by_step.md`](notes/cloudflare_access_step_by_step.md)。
 
-应用内身份以 Cloudflare Access 注入的 `Cf-Access-Authenticated-User-Email` 为准，
-首次进入时自动匹配 `users` 表；未准入的邮箱会被引导到邀请码页面。
+登录不再依赖 Cloudflare Access 的邮箱验证码。应用自己使用 **邮箱 + 密码** 登录，
+管理员通过邀请码准入新用户。Cloudflare 只保留 Tunnel，负责 HTTPS 转发。
 
 **首次启用：**
 
-1. 在 `.env` 设置 `QLIB_ADMIN_EMAIL=你的邮箱`，重启服务。
-2. 通过 Cloudflare Access 用该邮箱访问站点；应用会自动创建 admin 用户，
-   并把 `config/symbols.yaml` 里现有股票复制为你的自选（避免升级后侧栏空白）。
-3. 进入 `/admin/invites` 生成一次性邀请码，把链接发给朋友。
-4. 朋友先通过 Cloudflare 邮箱验证，再在 `/invite` 输入邀请码完成准入。
+1. 在 `.env` 设置：
+
+   ```ini
+   QLIB_ADMIN_EMAIL=你的邮箱
+   QLIB_ADMIN_PASSWORD=至少8位的密码
+   QLIB_COOKIE_SECURE=1
+   ```
+
+2. 重启服务。应用会自动创建 admin 用户，并把 `config/symbols.yaml` 里现有股票
+   复制为管理员的自选（避免升级后侧栏空白）。
+3. 打开 `https://你的域名/login`，用管理员邮箱和密码登录。
+4. 进入 `/admin/invites` 生成一次性邀请码，把链接发给朋友。
+5. 朋友打开链接，填写邀请码、邮箱和密码即可注册；不需要 Gmail、Google 账号
+   或 Cloudflare 邮箱验证码。
 
 **关键配置：**
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `QLIB_ADMIN_EMAIL` | 空 | 管理员邮箱，逗号分隔；为空时无法生成邀请码 |
-| `QLIB_TRUST_CF_HEADER` | `1` | 只在请求确实来自 Cloudflare Tunnel 时保持开启；直接暴露公网时必须设为 `0` |
-| `QLIB_ALLOW_DEV_LOGIN` | `0` | 本地开发用；与 `QLIB_DEV_EMAIL` 同时设置才会生效 |
-| `QLIB_DEV_EMAIL` | 空 | 本地模拟邮箱，生产环境不要设置 |
+| `QLIB_ADMIN_PASSWORD` | 空 | 管理员初始密码；首次启动写入数据库，之后修改不会覆盖已有密码 |
+| `QLIB_COOKIE_SECURE` | `1` | 生产环境 HTTPS 保持 `1`；本机 `http://127.0.0.1` 调试时设为 `0` |
 | `QLIB_SECRET_KEY` | 自动生成 | 会话签名密钥；留空时写入 `data/private/session_secret` |
+| `QLIB_LOGIN_MAX_FAILURES` | `10` | 15 分钟内同一邮箱/IP 的最大失败次数 |
+
+**重置密码：**
+
+```powershell
+.venv\Scripts\python web\set_password.py you@example.com
+```
+
+**Cloudflare 侧：**
+
+- 保留 Tunnel，把公网域名转发到 `http://localhost:8853`。
+- 删除或禁用 `qlib-lab` 的 Cloudflare Access 应用；否则用户会先被 Cloudflare
+  邮箱验证码挡住，无法到达应用登录页。
+- 如果暂时不想删除，也可以把 Access 策略设为 `Bypass`，但更推荐直接移除，
+  避免两套登录逻辑混在一起。
 
 **自选股隔离：**
 
@@ -259,7 +282,7 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 
 - **数据位置**：`data/private/positions.json`，已加入 `.gitignore`，**不会提交到 GitHub**。
   写入采用「临时文件 + `os.replace`」原子替换，并保留 `positions.json.bak`。
-  页面和 API 都只监听本机回环，公网访问仍由 Cloudflare Access 登录保护。
+  页面和 API 都只监听本机回环；公网 HTTPS 由 Cloudflare Tunnel 转发，登录由应用自己负责。
 - **多笔买入**：同一标的是一个持仓，下面挂多笔 lot；成本 = `Σ(价格×数量 + 手续费)`，
   均价 = 成本 ÷ 总数量。支持加仓、删除单笔、删除整个持仓。
   卖出后手动删除对应 lot 或整个持仓；账本不记录已实现盈亏，只做持仓侧提醒。
@@ -411,7 +434,7 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 接口：`GET /api/factor?market=cn&symbol=sh600519&expr=<URL 编码表达式>`。
 
 > 默认只监听 `127.0.0.1`（回环）。公网访问经 Cloudflare Tunnel 转发，
-> 由 Cloudflare Access 做邮箱登录，不直接暴露端口。
+> 由应用自己做邮箱 + 密码登录，不直接暴露端口。
 
 ---
 

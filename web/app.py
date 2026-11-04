@@ -30,11 +30,21 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 auth.init_app(app)
 
 app.add_url_rule("/login", "login_page", auth.login_page, methods=["GET"])
+app.add_url_rule("/login", "login_submit", auth.login_submit, methods=["POST"])
 app.add_url_rule("/invite", "invite_page", auth.invite_page, methods=["GET"])
-app.add_url_rule("/api/invite/redeem", "redeem_invite", auth.redeem_invite, methods=["POST"])
+app.add_url_rule("/invite", "invite_submit", auth.invite_submit, methods=["POST"])
 app.add_url_rule("/logout", "logout", auth.logout, methods=["GET", "POST"])
 app.add_url_rule("/api/auth/me", "api_me", auth.api_me, methods=["GET"])
 
+
+
+def _external_url(endpoint: str, **values) -> str:
+    """生成公网链接：Cloudflare Tunnel 下 Flask 看到的是 http，链接要还原成 https。"""
+    scheme = request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower()
+    if scheme not in ("http", "https"):
+        host = request.host.split(":")[0]
+        scheme = "http" if host in ("127.0.0.1", "localhost", "::1") else "https"
+    return url_for(endpoint, _external=True, _scheme=scheme, **values)
 
 
 @app.after_request
@@ -136,7 +146,7 @@ def api_admin_invite_create():
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    link = url_for("invite_page", code=invite["code"], _external=True)
+    link = _external_url("invite_page", code=invite["code"])
     return jsonify({"invite": invite, "link": link})
 
 
@@ -629,10 +639,8 @@ def main() -> None:
 
     if not auth.admin_emails():
         print("警告: 未配置 QLIB_ADMIN_EMAIL，无法自动创建管理员/生成邀请码。")
-    if auth.dev_login_allowed():
-        print(f"警告: 已开启本地开发登录 QLIB_DEV_EMAIL={auth.dev_email()}，生产环境请关闭。")
-    if auth.trust_cf_header() and args.host not in ("127.0.0.1", "localhost", "::1"):
-        print("警告: 非回环监听且信任 Cf-Access Header，Header 可能被伪造！")
+    elif not db.has_admin_with_password():
+        print("警告: 管理员还没有密码，请在 .env 设置 QLIB_ADMIN_PASSWORD 后重启。")
 
     if args.debug:
         app.run(host=args.host, port=args.port, debug=True)
