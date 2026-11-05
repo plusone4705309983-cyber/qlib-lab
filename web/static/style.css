@@ -930,6 +930,8 @@ body.nav-collapsed .resizer { display: none; }
 .admin-table th, .admin-table td { padding: 7px 8px; border-bottom: 1px solid #eef0f3; text-align: left; white-space: nowrap; }
 .admin-table th { color: var(--muted); font-weight: 600; background: #fafbfc; }
 .admin-table tr:hover td { background: #fafbfc; }
+.admin-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.admin-actions .btn.mini { padding: 2px 8px; }
 .admin-empty { padding: 16px; text-align: center; color: var(--muted); }
 .mono { font-family: Consolas, "Courier New", monospace; }
 .status-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; }

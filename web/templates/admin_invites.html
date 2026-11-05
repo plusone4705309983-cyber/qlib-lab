@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ffffff">
-<title>邀请码管理 · Qlib 数据检视器</title>
+<title>用户与邀请码管理 · Qlib 数据检视器</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="admin-body">
 <header>
   <a class="admin-back" href="/">← 返回</a>
-  <div class="brand">邀请码管理</div>
-  <div class="brand-sub">只有 admin 可见 · 一次性 + 短有效期最安全</div>
+  <div class="brand">用户与邀请码管理</div>
+  <div class="brand-sub">只有 admin 可见 · 邀请码一次性 + 短有效期最安全</div>
   <div class="spacer"></div>
   <div class="user-box">
     <span class="user-email">{{ current_user.email }}</span>
@@ -56,6 +56,11 @@
     <div class="admin-card-title">用户 <span id="user-count" class="muted"></span></div>
     <div id="user-table" class="admin-table-wrap"></div>
   </section>
+
+  <section class="admin-card hidden" id="user-watchlist-card">
+    <div class="admin-card-title" id="user-watchlist-title">用户自选</div>
+    <div id="user-watchlist" class="admin-table-wrap"></div>
+  </section>
 </main>
 
 <script>
@@ -71,6 +76,11 @@ const STATUS = {
   active: ["有效", "ok"],
   used: ["已用完", "muted"],
   expired: ["已过期", "warn"],
+};
+const USER_STATUS = {
+  active: ["启用", "ok"],
+  disabled: ["禁用", "warn"],
+  pending: ["待定", "muted"],
 };
 
 async function api(url, opts) {
@@ -116,18 +126,126 @@ function renderInvites(invites) {
 
 function renderUsers(users) {
   $("user-count").textContent = `(${users.length})`;
-  const rows = users.map((u) => `<tr>
-    <td>${esc(u.email)}</td>
-    <td><span class="role-badge ${u.role === "admin" ? "admin" : ""}">${esc(u.role)}</span></td>
-    <td>${esc(u.status)}</td>
-    <td>${u.watchlist_count ?? 0}</td>
-    <td>${fmtTime(u.created_at)}</td>
-    <td>${fmtTime(u.last_login_at)}</td>
-  </tr>`).join("");
+  const rows = users.map((u) => {
+    const [statusLabel, statusCls] = USER_STATUS[u.status] || [u.status, "muted"];
+    const actions = [
+      `<button class="btn mini" data-watchlist="${u.id}" data-email="${esc(u.email)}">自选</button>`,
+      `<button class="btn mini" data-reset="${u.id}" data-email="${esc(u.email)}">重置密码</button>`,
+    ];
+    if (!u.is_self) {
+      actions.push(
+        u.status === "active"
+          ? `<button class="btn mini danger" data-disable="${u.id}" data-email="${esc(u.email)}">禁用</button>`
+          : `<button class="btn mini" data-enable="${u.id}" data-email="${esc(u.email)}">启用</button>`
+      );
+      actions.push(`<button class="btn mini danger" data-delete="${u.id}" data-email="${esc(u.email)}">删除</button>`);
+    }
+    return `<tr>
+      <td>${esc(u.email)}</td>
+      <td><span class="role-badge ${u.role === "admin" ? "admin" : ""}">${esc(u.role)}</span></td>
+      <td><span class="status-pill ${statusCls}">${statusLabel}</span></td>
+      <td>${u.watchlist_count ?? 0}</td>
+      <td>${fmtTime(u.created_at)}</td>
+      <td>${fmtTime(u.last_login_at)}</td>
+      <td class="admin-actions">${actions.join("")}</td>
+    </tr>`;
+  }).join("");
   $("user-table").innerHTML = `<table class="admin-table">
     <thead><tr><th>邮箱</th><th>角色</th><th>状态</th><th>自选数</th>
-      <th>创建时间</th><th>最近登录</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="6" class="admin-empty">还没有用户</td></tr>'}</tbody></table>`;
+      <th>创建时间</th><th>最近登录</th><th>操作</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="7" class="admin-empty">还没有用户</td></tr>'}</tbody></table>`;
+
+  const root = $("user-table");
+  root.querySelectorAll("[data-watchlist]").forEach((btn) => {
+    btn.onclick = () => showWatchlist(btn.dataset.watchlist, btn.dataset.email);
+  });
+  root.querySelectorAll("[data-reset]").forEach((btn) => {
+    btn.onclick = () => resetPassword(btn.dataset.reset, btn.dataset.email);
+  });
+  root.querySelectorAll("[data-disable]").forEach((btn) => {
+    btn.onclick = () => setUserStatus(btn.dataset.disable, "disabled", btn.dataset.email);
+  });
+  root.querySelectorAll("[data-enable]").forEach((btn) => {
+    btn.onclick = () => setUserStatus(btn.dataset.enable, "active", btn.dataset.email);
+  });
+  root.querySelectorAll("[data-delete]").forEach((btn) => {
+    btn.onclick = () => deleteUser(btn.dataset.delete, btn.dataset.email);
+  });
+}
+
+async function showWatchlist(id, email) {
+  const card = $("user-watchlist-card");
+  card.classList.remove("hidden");
+  $("user-watchlist-title").textContent = `用户自选 · ${email}`;
+  $("user-watchlist").innerHTML = '<div class="admin-empty">加载中…</div>';
+  try {
+    const d = await api(`/api/admin/users/${id}/watchlist`);
+    const symbols = d.symbols || [];
+    if (!symbols.length) {
+      $("user-watchlist").innerHTML = '<div class="admin-empty">该用户还没有自选股</div>';
+      return;
+    }
+    const rows = symbols.map((s) => `<tr>
+      <td>${esc(s.market_label || s.market)}</td>
+      <td class="mono">${esc(s.qlib)}</td>
+      <td>${esc(s.name || "—")}</td>
+      <td>${s.rows ?? "—"}</td>
+    </tr>`).join("");
+    $("user-watchlist").innerHTML = `<table class="admin-table">
+      <thead><tr><th>市场</th><th>代码</th><th>名称</th><th>行数</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  } catch (e) {
+    $("user-watchlist").innerHTML = `<div class="admin-empty">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function resetPassword(id, email) {
+  const password = prompt(`为 ${email} 设置新密码（至少 8 位）`);
+  if (password === null) return;
+  const confirm = prompt("再输入一次新密码");
+  if (confirm === null) return;
+  if (password !== confirm) {
+    alert("两次输入的密码不一致");
+    return;
+  }
+  try {
+    await api(`/api/admin/users/${id}/password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, confirm }),
+    });
+    alert(`已重置 ${email} 的密码`);
+  } catch (e) {
+    alert(`重置失败：${e.message}`);
+  }
+}
+
+async function setUserStatus(id, status, email) {
+  const action = status === "disabled" ? "禁用" : "启用";
+  if (!confirm(`确定${action}用户 ${email}？`)) return;
+  try {
+    await api(`/api/admin/users/${id}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    $("gen-status").textContent = `已${action} ${email}`;
+    await load();
+  } catch (e) {
+    alert(`${action}失败：${e.message}`);
+  }
+}
+
+async function deleteUser(id, email) {
+  if (!confirm(`永久删除用户 ${email}？\n该用户的自选股会一起删除，邀请码记录保留。`)) return;
+  try {
+    await api(`/api/admin/users/${id}`, { method: "DELETE" });
+    $("gen-status").textContent = `已删除 ${email}`;
+    $("user-watchlist-card").classList.add("hidden");
+    await load();
+  } catch (e) {
+    alert(`删除失败：${e.message}`);
+  }
 }
 
 async function load() {

@@ -168,7 +168,52 @@ def main():
     check("前 3 次失败 401", codes[:3] == [401, 401, 401], str(codes))
     check("第 4 次触发 429", codes[3] == 429, str(codes))
 
-    print("[5] Cookie 安全配置")
+    print("[5] 管理员用户管理")
+    auth.reset_login_failures()
+    friend_row = db.get_user_by_email("friend@example.com")
+    check("测试用户存在", friend_row is not None)
+    fid = friend_row["id"] if friend_row else 0
+
+    r = admin.get(f"/api/admin/users/{fid}/watchlist")
+    check("管理员查看用户自选 200", r.status_code == 200 and r.get_json().get("symbols") == [], str(r.status_code))
+
+    r = admin.post(
+        f"/api/admin/users/{fid}/password",
+        json={"password": "friend-new-pass-123", "confirm": "friend-new-pass-123"},
+    )
+    check("管理员重置密码 200", r.status_code == 200, str(r.status_code))
+
+    old = client()
+    check("旧密码失效 401", login(old, "friend@example.com", "friend-pass-123").status_code == 401)
+    new = client()
+    check("新密码登录 302", login(new, "friend@example.com", "friend-new-pass-123").status_code == 302)
+
+    r = admin.post(f"/api/admin/users/{fid}/status", json={"status": "disabled"})
+    check("禁用用户 200", r.status_code == 200, str(r.status_code))
+    check("禁用后现有会话失效", new.get("/api/auth/me").get_json().get("authenticated") is False)
+    disabled = client()
+    check("禁用用户不能登录 403", login(disabled, "friend@example.com", "friend-new-pass-123").status_code == 403)
+
+    r = admin.post(f"/api/admin/users/{fid}/status", json={"status": "active"})
+    check("重新启用用户 200", r.status_code == 200, str(r.status_code))
+    reenabled = client()
+    check("启用后可以登录 302", login(reenabled, "friend@example.com", "friend-new-pass-123").status_code == 302)
+
+    admin_row = db.get_user_by_email("admin@example.com")
+    aid = admin_row["id"] if admin_row else 0
+    check("管理员不能删除自己 400", admin.delete(f"/api/admin/users/{aid}").status_code == 400)
+    check(
+        "管理员不能禁用自己 400",
+        admin.post(f"/api/admin/users/{aid}/status", json={"status": "disabled"}).status_code == 400,
+    )
+
+    r = admin.delete(f"/api/admin/users/{fid}")
+    check("删除用户 200", r.status_code == 200, str(r.status_code))
+    check("删除后用户不存在", db.get_user_by_email("friend@example.com") is None)
+    deleted = client()
+    check("删除后不能登录 401", login(deleted, "friend@example.com", "friend-new-pass-123").status_code == 401)
+
+    print("[6] Cookie 安全配置")
     os.environ["QLIB_COOKIE_SECURE"] = "1"
     probe = Flask("cookie_probe")
     auth.init_app(probe)

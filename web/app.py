@@ -61,10 +61,15 @@ def index():
 
 
 # ---------------------------------------------------------------- 自选股
+def _watchlist_for_user(user_id: int) -> list[dict]:
+    """指定用户的自选股 + 行情元信息；顺序沿用 config/symbols.yaml。"""
+    keys = {(x["market"], x["symbol"]) for x in db.list_watchlist(user_id)}
+    return [s for s in view.catalog() if (s["market"], s["qlib"]) in keys]
+
+
 def _watchlist_catalog() -> list[dict]:
     """当前用户自选股 + 行情元信息；顺序沿用 config/symbols.yaml。"""
-    keys = {(x["market"], x["symbol"]) for x in db.list_watchlist(current_user.id)}
-    return [s for s in view.catalog() if (s["market"], s["qlib"]) in keys]
+    return _watchlist_for_user(current_user.id)
 
 
 @app.get("/api/symbols")
@@ -118,10 +123,13 @@ def admin_invites_page():
 @app.get("/api/admin/invites")
 @auth.admin_required
 def api_admin_invites():
+    users = db.list_users()
+    for user in users:
+        user["is_self"] = user["id"] == current_user.id
     return jsonify(
         {
             "invites": db.list_invites(),
-            "users": db.list_users(),
+            "users": users,
             "quota": {
                 "window_hours": 24,
                 "max": 50,
@@ -155,6 +163,91 @@ def api_admin_invite_create():
 def api_admin_invite_revoke(invite_id):
     if not db.revoke_invite(invite_id):
         return jsonify({"error": "邀请码不存在"}), 404
+    return jsonify({"ok": True})
+
+
+def _admin_target(user_id: int):
+    user = db.get_user(user_id)
+    if user is None:
+        return None, (jsonify({"error": "用户不存在"}), 404)
+    return user, None
+
+
+@app.get("/api/admin/users")
+@auth.admin_required
+def api_admin_users():
+    users = db.list_users()
+    for user in users:
+        user["is_self"] = user["id"] == current_user.id
+    return jsonify({"users": users})
+
+
+@app.get("/api/admin/users/<int:user_id>/watchlist")
+@auth.admin_required
+def api_admin_user_watchlist(user_id):
+    user, error = _admin_target(user_id)
+    if error:
+        return error
+    return jsonify({"user": user, "symbols": _watchlist_for_user(user_id)})
+
+
+@app.post("/api/admin/users/<int:user_id>/status")
+@auth.admin_required
+def api_admin_user_status(user_id):
+    user, error = _admin_target(user_id)
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    status = str(payload.get("status") or "").strip().lower()
+    if status not in ("active", "disabled"):
+        return jsonify({"error": "status 只能是 active 或 disabled"}), 400
+    if user_id == current_user.id and status != "active":
+        return jsonify({"error": "不能禁用当前登录的管理员账号"}), 400
+    if (
+        user["role"] == "admin"
+        and status != "active"
+        and db.count_active_admins(exclude_user_id=user_id) == 0
+    ):
+        return jsonify({"error": "至少需要保留一个启用中的管理员"}), 400
+    try:
+        changed = db.set_status(user_id, status)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not changed:
+        return jsonify({"error": "用户不存在"}), 404
+    return jsonify({"ok": True, "user": db.get_user(user_id)})
+
+
+@app.post("/api/admin/users/<int:user_id>/password")
+@auth.admin_required
+def api_admin_user_password(user_id):
+    user, error = _admin_target(user_id)
+    if error:
+        return error
+    payload = request.get_json(silent=True) or {}
+    password = str(payload.get("password") or "")
+    confirm = str(payload.get("confirm") or "")
+    password_error = auth.validate_password(password)
+    if password_error:
+        return jsonify({"error": password_error}), 400
+    if password != confirm:
+        return jsonify({"error": "两次输入的密码不一致"}), 400
+    db.set_password(user_id, auth.hash_password(password))
+    return jsonify({"ok": True, "email": user["email"]})
+
+
+@app.delete("/api/admin/users/<int:user_id>")
+@auth.admin_required
+def api_admin_user_delete(user_id):
+    user, error = _admin_target(user_id)
+    if error:
+        return error
+    if user_id == current_user.id:
+        return jsonify({"error": "不能删除当前登录的管理员账号"}), 400
+    if user["role"] == "admin" and db.count_active_admins(exclude_user_id=user_id) == 0:
+        return jsonify({"error": "至少需要保留一个启用中的管理员"}), 400
+    if not db.delete_user(user_id):
+        return jsonify({"error": "用户不存在"}), 404
     return jsonify({"ok": True})
 
 

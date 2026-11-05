@@ -113,7 +113,7 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 
 预期：
 
-- `web\test_auth_local.py`：`31 PASS / 0 FAIL`；
+- `web\test_auth_local.py`：`46 PASS / 0 FAIL`；
 - `web\selftest.py`：原有 108 项全部 PASS。
 
 两个脚本都使用临时 SQLite，不会写 `data/private/qlib_lab.db`。
@@ -179,7 +179,7 @@ qlib.logoslab.cloud  →  http://localhost:8853
 1. 打开 `https://qlib.logoslab.cloud/login`。
 2. 输入 `QLIB_ADMIN_EMAIL` 和 `QLIB_ADMIN_PASSWORD`。
 3. 首次启动会自动创建 admin 用户，并把 `config/symbols.yaml` 里现有股票复制为管理员自选。
-4. 右上角出现「邀请码」入口，说明 admin 权限正常。
+4. 右上角出现「管理」入口，说明 admin 权限正常。
 
 检查：
 
@@ -223,7 +223,22 @@ Invoke-WebRequest https://qlib.logoslab.cloud/healthz -UseBasicParsing
 
 ---
 
-## 8. 重置密码
+## 8. 管理用户
+
+管理员在 `/admin/invites` 的「用户」表格里可以：
+
+- **自选**：查看该用户当前的自选股；
+- **重置密码**：直接给用户设置新密码；
+- **禁用/启用**：禁用后现有会话立即失效，且不能登录；
+- **删除**：永久删除用户及其自选，邀请码记录保留。
+
+保护规则：
+
+- 不能禁用或删除当前登录的管理员账号；
+- 不能删除最后一个启用中的管理员；
+- 删除用户不会删除邀请码历史，只会解除 `created_by` / `used_by` 引用。
+
+## 9. 重置密码（命令行）
 
 ```powershell
 Set-Location C:\Work_Data\Source_Code_New\qlib-lab
@@ -240,7 +255,7 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 
 ---
 
-## 9. 验收清单
+## 10. 验收清单
 
 管理员：
 
@@ -249,7 +264,12 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 - [ ] `/admin/invites` 能打开；
 - [ ] 能生成邀请码；
 - [ ] 邀请链接是 `https://`；
-- [ ] 管理员自选包含原有股票。
+- [ ] 管理员自选包含原有股票；
+- [ ] 能查看用户自选；
+- [ ] 能重置用户密码；
+- [ ] 能禁用/启用用户；
+- [ ] 能删除普通用户；
+- [ ] 不能禁用/删除当前登录的管理员。
 
 普通用户：
 
@@ -272,7 +292,7 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 
 ---
 
-## 10. 回滚
+## 11. 回滚
 
 代码回滚：
 
@@ -294,7 +314,7 @@ schtasks /Run /TN Qlib_App
 
 ---
 
-## 11. 故障排查
+## 12. 故障排查
 
 | 现象 | 可能原因 | 处理 |
 |---|---|---|

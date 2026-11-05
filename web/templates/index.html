@@ -18,7 +18,7 @@
   <div class="user-box">
     <span class="user-email" title="{{ current_user.email }}">{{ current_user.email }}</span>
     {% if current_user.is_admin %}
-      <a class="user-link" href="/admin/invites">邀请码</a>
+      <a class="user-link" href="/admin/invites">管理</a>
     {% endif %}
     <a class="user-link" href="/logout">退出</a>
   </div>

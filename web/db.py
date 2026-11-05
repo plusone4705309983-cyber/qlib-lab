@@ -204,6 +204,47 @@ def set_role(user_id: int, role: str) -> None:
         con.execute("UPDATE users SET role = ? WHERE id = ?", (role, int(user_id)))
 
 
+def set_status(user_id: int, status: str) -> bool:
+    if status not in ("active", "pending", "disabled"):
+        raise ValueError("status 只能是 active/pending/disabled")
+    with _connect() as con:
+        cur = con.execute(
+            "UPDATE users SET status = ? WHERE id = ?", (status, int(user_id))
+        )
+        return cur.rowcount > 0
+
+
+def count_active_admins(exclude_user_id: int | None = None) -> int:
+    sql = "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'"
+    params: tuple = ()
+    if exclude_user_id is not None:
+        sql += " AND id <> ?"
+        params = (int(exclude_user_id),)
+    with _connect() as con:
+        return int(con.execute(sql, params).fetchone()["n"])
+
+
+def delete_user(user_id: int) -> bool:
+    """硬删除用户及其自选；邀请码记录保留，但解除 created_by/used_by 引用。"""
+    con = _connect()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("UPDATE invites SET used_by = NULL WHERE used_by = ?", (int(user_id),))
+        con.execute("UPDATE invites SET created_by = NULL WHERE created_by = ?", (int(user_id),))
+        con.execute("DELETE FROM user_watchlist WHERE user_id = ?", (int(user_id),))
+        cur = con.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
+        con.execute("COMMIT")
+        return cur.rowcount > 0
+    except Exception:
+        try:
+            con.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        con.close()
+
+
 def list_users() -> list[dict]:
     with _connect() as con:
         rows = con.execute(

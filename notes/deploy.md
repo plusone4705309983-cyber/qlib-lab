@@ -77,7 +77,7 @@ sc.exe query Cloudflared
 
 ```powershell
 .venv\Scripts\python.exe web\test_auth_local.py
-# 期望 31 PASS / 0 FAIL（应用内登录 / 邀请码 / 权限 / 自选隔离 / 限速 / Cookie）
+# 期望 46 PASS / 0 FAIL（登录 / 邀请码 / 权限 / 自选隔离 / 限速 / 用户管理 / Cookie）
 
 .venv\Scripts\python.exe web\selftest.py --timeout 300000
 # 期望全 PASS（2026-11-04 基线：108 PASS / 0 FAIL）
