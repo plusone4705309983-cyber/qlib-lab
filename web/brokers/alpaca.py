@@ -17,8 +17,8 @@ from broker_config import BrokerConfigError, config
 
 
 class AlpacaBroker:
-    def __init__(self) -> None:
-        self.config = config
+    def __init__(self, config_obj=None) -> None:
+        self.config = config_obj or config
 
     def _request(self, method: str, path: str, json_body: dict | None = None, params: dict | None = None) -> Any:
         if requests is None:

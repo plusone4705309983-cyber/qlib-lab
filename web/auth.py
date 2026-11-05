@@ -20,6 +20,7 @@ from flask import jsonify, redirect, render_template, request, session, url_for
 from flask_login import LoginManager, UserMixin, current_user, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import audit
 import db
 
 HERE = Path(__file__).resolve().parent
@@ -328,21 +329,32 @@ def login_submit():
 
     if not email or "@" not in email or not password:
         ctx["error"] = "请输入邮箱和密码"
+        audit.log("login.invalid", detail={"reason": "missing_email_or_password"}, actor_email=email or None)
         return render_template("login.html", **ctx), 400
 
     key = _rate_key(email)
     if not _check_rate_limit(key):
         ctx["error"] = "登录失败次数过多，请 15 分钟后再试"
+        audit.log("login.rate_limited", detail={"window_minutes": 15}, actor_email=email)
         return render_template("login.html", **ctx), 429
 
     row = db.get_user_auth(email)
     if row is None or not row.get("password_hash") or not check_password_hash(row["password_hash"], password):
         _record_failure(key)
         ctx["error"] = "邮箱或密码不正确"
+        audit.log("login.failure", detail={"reason": "bad_credentials"}, actor_email=email)
         return render_template("login.html", **ctx), 401
 
     if row.get("status") != "active":
         ctx["error"] = "该账号已被禁用，请联系管理员"
+        audit.log(
+            "login.denied",
+            target_type="user",
+            target_id=row["id"],
+            detail={"reason": "disabled"},
+            actor_user_id=row["id"],
+            actor_email=email,
+        )
         return render_template("login.html", **ctx), 403
 
     # QLIB_ADMIN_EMAIL 中的邮箱始终拥有管理员权限（即使之前以普通用户注册）
@@ -354,6 +366,14 @@ def login_submit():
     session.clear()
     login_user(User(row))
     db.touch_login(row["id"])
+    audit.log(
+        "login.success",
+        target_type="user",
+        target_id=row["id"],
+        detail={"role": row.get("role")},
+        actor_user_id=row["id"],
+        actor_email=email,
+    )
     return redirect(next_url or url_for("index"))
 
 
@@ -401,17 +421,40 @@ def invite_submit():
     try:
         row = db.redeem_invite(code, email, hash_password(password))
     except db.InviteError as exc:
+        audit.log(
+            "invite.redeem_failed",
+            target_type="invite",
+            target_id=code,
+            detail={"email": email, "reason": str(exc)},
+            actor_email=email,
+        )
         return fail(str(exc))
     except Exception as exc:  # noqa: BLE001
+        audit.log(
+            "invite.redeem_failed",
+            target_type="invite",
+            target_id=code,
+            detail={"email": email, "reason": str(exc)},
+            actor_email=email,
+        )
         return fail(f"核销失败: {exc}", 500)
 
     session.clear()
     login_user(User(row))
     db.touch_login(row["id"])
+    audit.log(
+        "user.register",
+        target_type="invite",
+        target_id=code,
+        detail={"email": email},
+        actor_user_id=row["id"],
+        actor_email=email,
+    )
     return redirect(url_for("index"))
 
 
 def logout():
+    audit.log("logout")
     logout_user()
     session.clear()
     return redirect(url_for("login_page", logged_out=1))

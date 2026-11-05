@@ -1,8 +1,9 @@
 # 每用户个人空间 + 邀请码准入方案
 
-> **状态：历史设计稿。** P0 最终采用**应用内邮箱 + 密码登录**，Cloudflare 只保留 Tunnel；
+> **状态：历史设计稿（P0/P1/P2 已实施）。** P0 最终采用**应用内邮箱 + 密码登录**，
+> Cloudflare 只保留 Tunnel；P1 已按用户隔离 Alpaca BYOK 与持仓账本；P2 已加入审计日志。
 > 本文中依赖 Cloudflare Access 邮箱 OTP / `Cf-Access-Authenticated-User-Email` 的部分已不适用。
-> 当前实施与验收见 [`multiuser_p0_rollout.md`](multiuser_p0_rollout.md)。
+> 当前实施与验收见 [`multiuser_p0_rollout.md`](multiuser_p0_rollout.md) 和 [`../README.md`](../README.md)。
 
 > 目标：让 `qlib-lab` 从「单用户全局工具」过渡到「小圈子多租户」。
 > 核心思路：**应用内登录 + 邀请码准入 + 按用户隔离数据**。

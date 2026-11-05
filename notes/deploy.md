@@ -20,8 +20,10 @@
 | 隧道外部路由 | `qlib.logoslab.cloud` Type HTTP → `http://localhost:8853` | 在 CF Zero Trust 后台看，**别乱动** |
 | SSL | Cloudflare 没有做 SSL-拉平（拉平值为空） | 只记录，不建议改 |
 | 后端日志 | `web\logs\app.log` | `run.bat` 重定向 waitress/Flask/loguru 全部输出 |
-| 用户库 | `data/private/qlib_lab.db` | SQLite：用户 / 邀请码 / 每人自选；已 gitignore |
+| 用户库 | `data/private/qlib_lab.db` | SQLite：用户 / 邀请码 / 每人自选 / 加密后的 Alpaca 密钥 / 审计日志；已 gitignore |
 | 会话密钥 | `data/private/session_secret` | 未设 `QLIB_SECRET_KEY` 时自动生成；已 gitignore |
+| 密钥加密主密钥 | `data/private/master_key` | 未设 `QLIB_MASTER_KEY` 时自动生成；备份数据库时必须一起备份 |
+| 每人持仓账本 | `data/private/users/{user_id}/positions.json` | 按用户隔离；已 gitignore |
 | 真实数据 | `data/selfmade/{cn,us}/*.csv`（**CSV = 唯一事实来源**） | bin 由 CSV 确定性重建；bin 不进 git |
 | 原始缓存 | `data/_raw_cache/*.json` | **有意提交**，离线可复现 CSV |
 | Python | `%ROOT%\.venv\Scripts\python.exe` | `run.bat` 自动优先选 venv |
@@ -77,7 +79,7 @@ sc.exe query Cloudflared
 
 ```powershell
 .venv\Scripts\python.exe web\test_auth_local.py
-# 期望 46 PASS / 0 FAIL（登录 / 邀请码 / 权限 / 自选隔离 / 限速 / 用户管理 / Cookie）
+# 期望 76 PASS / 0 FAIL（登录 / 邀请码 / 权限 / 自选隔离 / 限速 / 用户管理 / 持仓隔离 / Alpaca BYOK / 审计日志 / Cookie）
 
 .venv\Scripts\python.exe web\selftest.py --timeout 300000
 # 期望全 PASS（2026-11-04 基线：108 PASS / 0 FAIL）
@@ -129,5 +131,6 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 - **别手改 bin**：一切从 CSV 重建。bin 在 `.gitignore` 里。
 - **`data/_raw_cache/` 有意提交**：保证离线可复现、审计数据来源，不要清理。
 - **多用户 P0**：生产环境必须设置 `QLIB_ADMIN_EMAIL` 和 `QLIB_ADMIN_PASSWORD`；登录由应用自己负责，Cloudflare 只保留 Tunnel。生产 HTTPS 保持 `QLIB_COOKIE_SECURE=1`。
-- **P0 权限边界**：P1（BYOK + 账本按用户隔离）完成前，模拟交易和持仓账本接口只对 admin 开放；普通用户仍可用行情、因子、信号和自己的「我的自选」。
+- **P1 权限边界**：持仓账本对所有已登录用户开放，但按 `user_id` 隔离；模拟交易改为 BYOK，每个用户在 `/settings` 填自己的 Alpaca Paper 密钥，未配置时接口返回 400，网页端不再回退到 `.env` 的共享 `APCA_*`。
+- **P2 审计日志**：admin 在 `/admin/audit` 查看；记录登录、邀请码、用户管理、BYOK、下单/撤单和自选变更。只追加，不记录密码和完整密钥。
 - 计划任务 `Qlib_App` 的触发器是"登录时"：机器重启后**必须有人登录**应用才会拉起（隧道服务是 AUTO_START，会自己起来，但没应用可转发就是 502）。

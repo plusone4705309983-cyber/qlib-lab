@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>审计日志 · Qlib 数据检视器</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-body">
+<header>
+  <a class="admin-back" href="/admin/invites">← 用户与邀请码</a>
+  <div class="brand">审计日志</div>
+  <div class="brand-sub">登录 / 邀请码 / 管理员操作 / BYOK / 下单 · 不记录密码和完整密钥</div>
+  <div class="spacer"></div>
+  <div class="user-box">
+    <span class="user-email">{{ current_user.email }}</span>
+    <span class="role-badge admin">admin</span>
+    <a class="user-link" href="/settings">设置</a>
+    <a class="user-link" href="/logout">退出</a>
+  </div>
+</header>
+
+<main class="admin-main">
+  <section class="admin-card">
+    <div class="admin-card-title">筛选</div>
+    <div class="admin-form">
+      <label>动作包含
+        <input id="filter-action" placeholder="login / invite / admin / broker">
+      </label>
+      <label>操作者邮箱包含
+        <input id="filter-actor" placeholder="name@example.com">
+      </label>
+      <label>条数
+        <select id="filter-limit">
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+      </label>
+      <button id="refresh" class="btn btn-primary">刷新</button>
+      <span id="status" class="muted"></span>
+    </div>
+    <div class="admin-note">
+      审计日志只追加，不提供网页删除入口。时间按本机时区显示；IP 优先取 Cloudflare
+      的 <code>CF-Connecting-IP</code>，本机直连时取回环地址。
+    </div>
+  </section>
+
+  <section class="admin-card">
+    <div class="admin-card-title">最近事件 <span id="count" class="muted"></span></div>
+    <div id="audit-table" class="admin-table-wrap"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtTime = (s) => {
+  if (!s) return "—";
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? esc(s) : d.toLocaleString("zh-CN", { hour12: false });
+};
+
+async function loadAudit() {
+  const params = new URLSearchParams();
+  const action = $("filter-action").value.trim();
+  const actor = $("filter-actor").value.trim();
+  if (action) params.set("action", action);
+  if (actor) params.set("actor", actor);
+  params.set("limit", $("filter-limit").value);
+
+  $("status").textContent = "加载中…";
+  try {
+    const res = await fetch(`/api/admin/audit?${params.toString()}`);
+    const data = await res.json();
+    if (res.status === 401) {
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+      return;
+    }
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    const events = data.events || [];
+    $("count").textContent = `(${events.length})`;
+    $("status").textContent = "";
+    if (!events.length) {
+      $("audit-table").innerHTML = '<div class="admin-empty">没有匹配的审计事件</div>';
+      return;
+    }
+    const rows = events.map((e) => `
+      <tr>
+        <td class="mono">${fmtTime(e.ts)}</td>
+        <td>${esc(e.actor_email || "—")}</td>
+        <td class="mono">${esc(e.action)}</td>
+        <td>${esc(e.target_type || "—")}${e.target_id ? ` / <span class="mono">${esc(e.target_id)}</span>` : ""}</td>
+        <td class="mono" style="white-space:normal;max-width:420px">${esc(e.detail || "")}</td>
+        <td class="mono">${esc(e.ip || "—")}</td>
+      </tr>`).join("");
+    $("audit-table").innerHTML = `
+      <table class="admin-table">
+        <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>目标</th><th>详情</th><th>IP</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (e) {
+    $("status").textContent = `加载失败：${e.message}`;
+  }
+}
+
+$("refresh").onclick = loadAudit;
+$("filter-action").addEventListener("keydown", (e) => { if (e.key === "Enter") loadAudit(); });
+$("filter-actor").addEventListener("keydown", (e) => { if (e.key === "Enter") loadAudit(); });
+loadAudit();
+</script>
+</body>
+</html>

@@ -1,7 +1,9 @@
 """Alpaca Paper 配置加载（仅允许 paper 环境）。
 
-密钥从 .env 读取：APCA_API_KEY_ID / APCA_API_SECRET_KEY / APCA_BASE_URL。
-强制校验 base_url 必须是 https://paper-api.alpaca.markets，避免误连实盘。
+P1 起网页端使用 `user_broker.config_for_user()` 传入当前用户的密钥；
+本模块仍支持从 .env 读取 APCA_API_KEY_ID / APCA_API_SECRET_KEY / APCA_BASE_URL，
+仅用于兼容旧 CLI/本地调试。强制校验 base_url 必须是
+https://paper-api.alpaca.markets，避免误连实盘。
 """
 
 from __future__ import annotations
@@ -44,15 +46,29 @@ class BrokerConfigError(RuntimeError):
 
 
 class BrokerConfig:
-    def __init__(self) -> None:
-        self.key_id = os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID") or ""
+    def __init__(
+        self,
+        key_id: str | None = None,
+        secret_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        # 显式传入时优先使用（P1 按用户取密钥）；否则回退到 .env（仅兼容旧调用/CLI）。
+        self.key_id = (
+            key_id
+            if key_id is not None
+            else os.environ.get("APCA_API_KEY_ID") or os.environ.get("ALPACA_API_KEY_ID") or ""
+        )
         self.secret_key = (
-            os.environ.get("APCA_API_SECRET_KEY")
+            secret_key
+            if secret_key is not None
+            else os.environ.get("APCA_API_SECRET_KEY")
             or os.environ.get("ALPACA_API_SECRET_KEY")
             or ""
         )
         self.base_url = (
-            os.environ.get("APCA_BASE_URL")
+            base_url
+            if base_url is not None
+            else os.environ.get("APCA_BASE_URL")
             or os.environ.get("ALPACA_BASE_URL")
             or PAPER_BASE_URL
         ).rstrip("/")

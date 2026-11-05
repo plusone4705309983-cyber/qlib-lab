@@ -16,14 +16,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import broker_config  # noqa: E402,F401  先加载 .env，供 auth / db 读取 QLIB_* 配置
+import audit  # noqa: E402
 import auth  # noqa: E402
 import db  # noqa: E402
 import stocks  # noqa: E402
+import user_broker  # noqa: E402
 import view  # noqa: E402
 import portfolio  # noqa: E402
 
 from flask import Flask, Response, jsonify, render_template, request, url_for  # noqa: E402
-from flask_login import current_user  # noqa: E402
+from flask_login import current_user, login_required  # noqa: E402
 
 app = Flask(__name__)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -58,6 +60,17 @@ def _no_cache(resp):
 @app.get("/")
 def index():
     return render_template("index.html")
+
+
+@app.get("/settings")
+@login_required
+def settings_page():
+    return render_template("settings.html")
+
+
+def _portfolio_user_id():
+    """selftest 的 QLIB_AUTH_DISABLED 模式沿用旧全局账本；生产按用户隔离。"""
+    return None if auth.auth_disabled() else current_user.id
 
 
 # ---------------------------------------------------------------- 自选股
@@ -104,13 +117,89 @@ def api_watchlist_add():
     if meta is None:
         return jsonify({"error": f"未配置的标的: {market}/{symbol}"}), 404
     db.add_watchlist(current_user.id, meta["market"], meta["qlib"])
+    audit.log(
+        "watchlist.add",
+        target_type="symbol",
+        target_id=f"{meta['market']}/{meta['qlib']}",
+    )
     return jsonify({"ok": True, "symbols": _watchlist_catalog()})
 
 
 @app.delete("/api/watchlist/<market>/<symbol>")
 def api_watchlist_remove(market, symbol):
     removed = db.remove_watchlist(current_user.id, market, symbol)
+    audit.log(
+        "watchlist.remove",
+        target_type="symbol",
+        target_id=f"{market}/{symbol}",
+        detail={"removed": bool(removed)},
+    )
     return jsonify({"ok": True, "removed": removed, "symbols": _watchlist_catalog()})
+
+
+# ---------------------------------------------------------------- 个人设置：Alpaca BYOK
+@app.get("/api/me/broker")
+@login_required
+def api_me_broker():
+    try:
+        return jsonify(user_broker.status(current_user.id))
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc), "configured": False}), 400
+
+
+@app.post("/api/me/broker")
+@login_required
+def api_me_broker_save():
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = user_broker.save(
+            current_user.id,
+            str(payload.get("key_id") or ""),
+            str(payload.get("secret_key") or ""),
+            payload.get("base_url"),
+        )
+        audit.log(
+            "broker.save",
+            target_type="user",
+            target_id=current_user.id,
+            detail={"key_hint": result.get("key_hint")},
+        )
+        return jsonify(result)
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.delete("/api/me/broker")
+@login_required
+def api_me_broker_delete():
+    user_broker.delete(current_user.id)
+    audit.log("broker.delete", target_type="user", target_id=current_user.id)
+    return jsonify({"ok": True, "configured": False})
+
+
+@app.post("/api/me/broker/test")
+@login_required
+def api_me_broker_test():
+    try:
+        from brokers import get_broker
+
+        cfg = user_broker.config_for_user(current_user.id)
+        account = get_broker(cfg).get_account()
+        return jsonify(
+            {
+                "ok": True,
+                "account": {
+                    "status": account.get("status"),
+                    "cash": account.get("cash"),
+                    "buying_power": account.get("buying_power"),
+                    "equity": account.get("equity"),
+                },
+            }
+        )
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
 
 
 # ---------------------------------------------------------------- 管理后台
@@ -118,6 +207,27 @@ def api_watchlist_remove(market, symbol):
 @auth.admin_required
 def admin_invites_page():
     return render_template("admin_invites.html")
+
+
+@app.get("/admin/audit")
+@auth.admin_required
+def admin_audit_page():
+    return render_template("admin_audit.html")
+
+
+@app.get("/api/admin/audit")
+@auth.admin_required
+def api_admin_audit():
+    return jsonify(
+        {
+            "events": db.list_audit(
+                limit=request.args.get("limit", 100),
+                offset=request.args.get("offset", 0),
+                action=request.args.get("action"),
+                actor=request.args.get("actor"),
+            )
+        }
+    )
 
 
 @app.get("/api/admin/invites")
@@ -154,6 +264,12 @@ def api_admin_invite_create():
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    audit.log(
+        "invite.create",
+        target_type="invite",
+        target_id=invite["code"],
+        detail={"max_uses": invite.get("max_uses"), "expires_at": invite.get("expires_at")},
+    )
     link = _external_url("invite_page", code=invite["code"])
     return jsonify({"invite": invite, "link": link})
 
@@ -163,6 +279,7 @@ def api_admin_invite_create():
 def api_admin_invite_revoke(invite_id):
     if not db.revoke_invite(invite_id):
         return jsonify({"error": "邀请码不存在"}), 404
+    audit.log("invite.revoke", target_type="invite", target_id=invite_id)
     return jsonify({"ok": True})
 
 
@@ -215,6 +332,12 @@ def api_admin_user_status(user_id):
         return jsonify({"error": str(exc)}), 400
     if not changed:
         return jsonify({"error": "用户不存在"}), 404
+    audit.log(
+        "admin.user_status",
+        target_type="user",
+        target_id=user_id,
+        detail={"email": user["email"], "status": status},
+    )
     return jsonify({"ok": True, "user": db.get_user(user_id)})
 
 
@@ -233,6 +356,12 @@ def api_admin_user_password(user_id):
     if password != confirm:
         return jsonify({"error": "两次输入的密码不一致"}), 400
     db.set_password(user_id, auth.hash_password(password))
+    audit.log(
+        "admin.user_password_reset",
+        target_type="user",
+        target_id=user_id,
+        detail={"email": user["email"]},
+    )
     return jsonify({"ok": True, "email": user["email"]})
 
 
@@ -248,6 +377,13 @@ def api_admin_user_delete(user_id):
         return jsonify({"error": "至少需要保留一个启用中的管理员"}), 400
     if not db.delete_user(user_id):
         return jsonify({"error": "用户不存在"}), 404
+    portfolio.delete_user_positions(user_id)
+    audit.log(
+        "admin.user_delete",
+        target_type="user",
+        target_id=user_id,
+        detail={"email": user["email"], "role": user["role"]},
+    )
     return jsonify({"ok": True})
 
 
@@ -396,20 +532,20 @@ def api_holder_stocks():
 
 
 @app.get("/api/positions")
-@auth.admin_required
+@login_required
 def api_positions():
     try:
-        return jsonify(portfolio.list_positions())
+        return jsonify(portfolio.list_positions(_portfolio_user_id()))
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
 
 
 @app.post("/api/positions")
-@auth.admin_required
+@login_required
 def api_positions_add():
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify(portfolio.add_lot(payload))
+        return jsonify(portfolio.add_lot(payload, _portfolio_user_id()))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except RuntimeError as exc:
@@ -417,11 +553,11 @@ def api_positions_add():
 
 
 @app.patch("/api/positions/<pos_id>")
-@auth.admin_required
+@login_required
 def api_positions_patch(pos_id):
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify(portfolio.update_settings(pos_id, payload))
+        return jsonify(portfolio.update_settings(pos_id, payload, _portfolio_user_id()))
     except KeyError:
         return jsonify({"error": "无此持仓"}), 404
     except ValueError as exc:
@@ -431,10 +567,10 @@ def api_positions_patch(pos_id):
 
 
 @app.delete("/api/positions/<pos_id>")
-@auth.admin_required
+@login_required
 def api_positions_delete(pos_id):
     try:
-        return jsonify(portfolio.delete_position(pos_id))
+        return jsonify(portfolio.delete_position(pos_id, _portfolio_user_id()))
     except KeyError:
         return jsonify({"error": "无此持仓"}), 404
     except RuntimeError as exc:
@@ -442,10 +578,10 @@ def api_positions_delete(pos_id):
 
 
 @app.delete("/api/positions/<pos_id>/lots/<lot_id>")
-@auth.admin_required
+@login_required
 def api_positions_delete_lot(pos_id, lot_id):
     try:
-        return jsonify(portfolio.delete_lot(pos_id, lot_id))
+        return jsonify(portfolio.delete_lot(pos_id, lot_id, _portfolio_user_id()))
     except KeyError:
         return jsonify({"error": "无此持仓或买入记录"}), 404
     except RuntimeError as exc:
@@ -453,14 +589,14 @@ def api_positions_delete_lot(pos_id, lot_id):
 
 
 @app.post("/api/positions/evaluate")
-@auth.admin_required
+@login_required
 def api_positions_evaluate():
     payload = request.get_json(silent=True) or {}
     ids = payload.get("ids")
     if ids is not None and (not isinstance(ids, list) or not all(isinstance(x, str) for x in ids)):
         return jsonify({"error": "ids 必须是字符串数组"}), 400
     try:
-        return jsonify(portfolio.evaluate(ids))
+        return jsonify(portfolio.evaluate(ids, _portfolio_user_id()))
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
     except Exception as exc:  # noqa: BLE001
@@ -481,18 +617,18 @@ def api_quote():
 
 @app.get("/api/positions/export")
 @app.get("/api/positions/export.csv")
-@auth.admin_required
+@login_required
 def api_positions_export():
     fmt = request.args.get("fmt", "json").lower()
     if fmt in ("csv", "xlsx"):
-        body = portfolio.export_csv()
+        body = portfolio.export_csv(_portfolio_user_id())
         return Response(
             body,
             mimetype="text/csv; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=positions.csv"},
         )
     try:
-        body = portfolio.export_json()
+        body = portfolio.export_json(_portfolio_user_id())
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
     return Response(
@@ -502,20 +638,32 @@ def api_positions_export():
     )
 
 
-# ---------------------------------------------------------------- 模拟交易（Alpaca Paper）
+# ---------------------------------------------------------------- 模拟交易（Alpaca Paper BYOK）
+def _current_broker():
+    from brokers import get_broker
+
+    cfg = user_broker.config_for_user(current_user.id)
+    return get_broker(cfg), cfg
+
+
 @app.get("/api/broker/status")
-@auth.admin_required
+@login_required
 def api_broker_status():
     try:
-        from broker_config import BrokerConfigError, config
-        from brokers import get_broker
-
-        config.require_paper()
-        broker = get_broker()
+        broker, cfg = _current_broker()
         account = broker.get_account()
-        return jsonify({"configured": config.configured, "paper": True, "account": account, "config": config.summary()})
-    except BrokerConfigError as exc:
-        return jsonify({"error": str(exc), "configured": False}), 400
+        return jsonify(
+            {
+                "configured": True,
+                "paper": True,
+                "account": account,
+                "config": cfg.summary(),
+            }
+        )
+    except user_broker.UserBrokerError as exc:
+        return jsonify(
+            {"error": str(exc), "configured": False, "settings_url": "/settings"}
+        ), 400
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
     except Exception as exc:  # noqa: BLE001
@@ -523,12 +671,13 @@ def api_broker_status():
 
 
 @app.get("/api/broker/positions")
-@auth.admin_required
+@login_required
 def api_broker_positions():
     try:
-        from brokers import get_broker
-
-        return jsonify({"positions": get_broker().get_positions()})
+        broker, _ = _current_broker()
+        return jsonify({"positions": broker.get_positions()})
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc), "settings_url": "/settings"}), 400
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
     except Exception as exc:  # noqa: BLE001
@@ -536,18 +685,19 @@ def api_broker_positions():
 
 
 @app.get("/api/broker/orders")
-@auth.admin_required
+@login_required
 def api_broker_orders():
     try:
-        from brokers import get_broker
-
+        broker, _ = _current_broker()
         status = request.args.get("status")
         limit = request.args.get("limit", 50)
         try:
             limit = int(limit)
         except Exception:
             limit = 50
-        return jsonify({"orders": get_broker().get_orders(status=status, limit=limit)})
+        return jsonify({"orders": broker.get_orders(status=status, limit=limit)})
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc), "settings_url": "/settings"}), 400
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
     except Exception as exc:  # noqa: BLE001
@@ -555,7 +705,7 @@ def api_broker_orders():
 
 
 @app.get("/api/broker/log")
-@auth.admin_required
+@login_required
 def api_broker_log():
     try:
         from brokers.orders_log import get_log
@@ -565,13 +715,13 @@ def api_broker_log():
             limit = int(limit)
         except Exception:
             limit = 30
-        return jsonify({"log": get_log(limit)})
+        return jsonify({"log": get_log(limit, user_id=current_user.id)})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
 
 
 @app.post("/api/broker/preview")
-@auth.admin_required
+@login_required
 def api_broker_preview():
     payload = request.get_json(silent=True) or {}
     symbol = str(payload.get("symbol") or "").strip().upper()
@@ -583,13 +733,8 @@ def api_broker_preview():
     if symbol == "":
         return jsonify({"error": "缺少 symbol"}), 400
     try:
-        from broker_config import BrokerConfigError, config
-        from brokers import get_broker
-
-        config.require_paper()
-        if not config.configured:
-            raise BrokerConfigError("缺少 Alpaca Paper 密钥：请在 .env 设置 APCA_API_KEY_ID / APCA_API_SECRET_KEY")
-        account = get_broker().get_account()
+        broker, _ = _current_broker()
+        account = broker.get_account()
         buying_power = account.get("buying_power")
         cash = account.get("cash")
         preview = {
@@ -602,8 +747,8 @@ def api_broker_preview():
             "account": {"buying_power": buying_power, "cash": cash},
         }
         return jsonify({"preview": preview, "note": "市价单将在美股交易时段撮合，实际成交价可能与点击时价格略有偏差"})
-    except BrokerConfigError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc), "settings_url": "/settings"}), 400
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
     except Exception as exc:  # noqa: BLE001
@@ -611,7 +756,7 @@ def api_broker_preview():
 
 
 @app.post("/api/broker/order")
-@auth.admin_required
+@login_required
 def api_broker_order():
     payload = request.get_json(silent=True) or {}
     symbol = str(payload.get("symbol") or "").strip().upper()
@@ -631,9 +776,9 @@ def api_broker_order():
     if qty is None and notional is None:
         return jsonify({"error": "需提供 qty（股数）或 notional（金金额）"}), 400
     try:
-        from brokers import get_broker
         from brokers.orders_log import log_order
 
+        broker, _ = _current_broker()
         body = {"symbol": symbol, "side": side, "type": order_type, "time_in_force": tif}
         if qty is not None:
             # Alpaca 接受字符串或数字，尽量用数值但兼容
@@ -646,14 +791,31 @@ def api_broker_order():
                 body["notional"] = float(notional)
             except Exception:
                 body["notional"] = notional
-        order = get_broker().place_order(body)
-        log_order({"action": "place_order", "body": body, "result": order})
+        order = broker.place_order(body)
+        log_order({"action": "place_order", "body": body, "result": order}, user_id=current_user.id)
+        audit.log(
+            "broker.order",
+            target_type="order",
+            target_id=order.get("id"),
+            detail={
+                "symbol": symbol,
+                "side": side,
+                "qty": body.get("qty"),
+                "notional": body.get("notional"),
+                "status": order.get("status"),
+            },
+        )
         return jsonify({"order": order})
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc), "settings_url": "/settings"}), 400
     except RuntimeError as exc:
         try:
             from brokers.orders_log import log_order
 
-            log_order({"action": "place_order_error", "body": payload, "error": str(exc)})
+            log_order(
+                {"action": "place_order_error", "body": payload, "error": str(exc)},
+                user_id=current_user.id,
+            )
         except Exception:
             pass
         return jsonify({"error": str(exc)}), 500
@@ -661,22 +823,31 @@ def api_broker_order():
         try:
             from brokers.orders_log import log_order
 
-            log_order({"action": "place_order_error", "body": payload, "error": str(exc)})
+            log_order(
+                {"action": "place_order_error", "body": payload, "error": str(exc)},
+                user_id=current_user.id,
+            )
         except Exception:
             pass
         return jsonify({"error": str(exc)}), 500
 
 
 @app.post("/api/broker/orders/<order_id>/cancel")
-@auth.admin_required
+@login_required
 def api_broker_cancel(order_id):
     try:
-        from brokers import get_broker
         from brokers.orders_log import log_order
 
-        res = get_broker().cancel_order(order_id)
-        log_order({"action": "cancel_order", "order_id": order_id, "result": res})
+        broker, _ = _current_broker()
+        res = broker.cancel_order(order_id)
+        log_order(
+            {"action": "cancel_order", "order_id": order_id, "result": res},
+            user_id=current_user.id,
+        )
+        audit.log("broker.cancel", target_type="order", target_id=order_id)
         return jsonify({"result": res})
+    except user_broker.UserBrokerError as exc:
+        return jsonify({"error": str(exc), "settings_url": "/settings"}), 400
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
     except Exception as exc:  # noqa: BLE001
@@ -734,6 +905,14 @@ def main() -> None:
         print("警告: 未配置 QLIB_ADMIN_EMAIL，无法自动创建管理员/生成邀请码。")
     elif not db.has_admin_with_password():
         print("警告: 管理员还没有密码，请在 .env 设置 QLIB_ADMIN_PASSWORD 后重启。")
+
+    try:
+        admin_email = next(iter(auth.admin_emails()), "")
+        admin_row = db.get_user_by_email(admin_email) if admin_email else None
+        if admin_row and portfolio.migrate_legacy_positions(admin_row["id"]):
+            print(f"已迁移旧持仓账本 -> {portfolio.positions_path(admin_row['id'])}")
+    except Exception as exc:  # noqa: BLE001  迁移失败不应阻塞启动
+        print(f"警告: 旧持仓账本迁移失败: {exc}")
 
     if args.debug:
         app.run(host=args.host, port=args.port, debug=True)

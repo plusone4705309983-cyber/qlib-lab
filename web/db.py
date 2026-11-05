@@ -103,8 +103,32 @@ def init_db() -> None:
                 PRIMARY KEY (user_id, market, symbol)
             );
 
+            CREATE TABLE IF NOT EXISTS user_broker (
+                user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                api_key_enc  TEXT NOT NULL,
+                secret_enc   TEXT NOT NULL,
+                base_url     TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts            TEXT NOT NULL,
+                actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                actor_email   TEXT,
+                action        TEXT NOT NULL,
+                target_type   TEXT,
+                target_id     TEXT,
+                detail        TEXT,
+                ip            TEXT,
+                user_agent    TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_invites_code ON invites(code);
             CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+            CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+            CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_email);
             """
         )
         # 兼容 P0 早期数据库：users 表最初没有 password_hash。
@@ -190,6 +214,50 @@ def has_admin_with_password() -> bool:
             "SELECT 1 FROM users WHERE role = 'admin' AND password_hash IS NOT NULL LIMIT 1"
         ).fetchone()
         return row is not None
+
+
+# ---------------------------------------------------------------- 用户券商密钥
+def get_user_broker(user_id: int) -> dict | None:
+    with _connect() as con:
+        row = con.execute(
+            "SELECT * FROM user_broker WHERE user_id = ?", (int(user_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_id": row["user_id"],
+            "api_key_enc": row["api_key_enc"],
+            "secret_enc": row["secret_enc"],
+            "base_url": row["base_url"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def upsert_user_broker(
+    user_id: int,
+    api_key_enc: str,
+    secret_enc: str,
+    base_url: str,
+) -> None:
+    with _connect() as con:
+        con.execute(
+            """
+            INSERT INTO user_broker (user_id, api_key_enc, secret_enc, base_url, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                api_key_enc = excluded.api_key_enc,
+                secret_enc = excluded.secret_enc,
+                base_url = excluded.base_url,
+                updated_at = excluded.updated_at
+            """,
+            (int(user_id), api_key_enc, secret_enc, base_url, now_iso()),
+        )
+
+
+def delete_user_broker(user_id: int) -> bool:
+    with _connect() as con:
+        cur = con.execute("DELETE FROM user_broker WHERE user_id = ?", (int(user_id),))
+        return cur.rowcount > 0
 
 
 def touch_login(user_id: int) -> None:
@@ -454,6 +522,81 @@ def seed_watchlist(user_id: int, items: list[dict]) -> None:
             "INSERT OR IGNORE INTO user_watchlist (user_id, market, symbol, added_at) VALUES (?, ?, ?, ?)",
             [(int(user_id), str(x["market"]).lower(), str(x["symbol"]).lower(), now) for x in items],
         )
+
+
+# ---------------------------------------------------------------- 审计日志
+def add_audit(
+    actor_user_id: int | None,
+    actor_email: str | None,
+    action: str,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    detail: str | None = None,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    with _connect() as con:
+        con.execute(
+            """
+            INSERT INTO audit_log
+                (ts, actor_user_id, actor_email, action, target_type, target_id, detail, ip, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now_iso(),
+                int(actor_user_id) if actor_user_id is not None else None,
+                actor_email,
+                action,
+                target_type,
+                target_id,
+                detail,
+                ip,
+                user_agent,
+            ),
+        )
+
+
+def list_audit(
+    limit: int = 100,
+    offset: int = 0,
+    action: str | None = None,
+    actor: str | None = None,
+) -> list[dict]:
+    try:
+        limit = max(1, min(int(limit), 500))
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        offset = max(0, int(offset))
+    except (TypeError, ValueError):
+        offset = 0
+
+    clauses = []
+    params: list = []
+    action = (action or "").strip()
+    actor = (actor or "").strip()
+    if action:
+        clauses.append("action LIKE ?")
+        params.append(f"%{action}%")
+    if actor:
+        clauses.append("actor_email LIKE ?")
+        params.append(f"%{actor}%")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.extend([limit, offset])
+
+    with _connect() as con:
+        rows = con.execute(
+            f"""
+            SELECT id, ts, actor_user_id, actor_email, action, target_type, target_id,
+                   detail, ip, user_agent
+            FROM audit_log
+            {where}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 init_db()

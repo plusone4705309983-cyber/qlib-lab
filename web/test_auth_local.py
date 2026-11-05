@@ -8,9 +8,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cryptography.fernet import Fernet
+
 _TMP = tempfile.mkdtemp(prefix="qlib_lab_auth_test_")
 os.environ["QLIB_DB_PATH"] = str(Path(_TMP) / "auth.db")
 os.environ["QLIB_SECRET_KEY"] = "auth-test-only-secret"
+os.environ["QLIB_MASTER_KEY"] = Fernet.generate_key().decode("ascii")
 os.environ["QLIB_AUTH_DISABLED"] = "0"
 os.environ["QLIB_ADMIN_EMAIL"] = "admin@example.com"
 os.environ["QLIB_ADMIN_PASSWORD"] = "admin-pass-123"
@@ -25,9 +28,15 @@ from flask import Flask  # noqa: E402
 
 import auth  # noqa: E402
 import db  # noqa: E402
+import portfolio  # noqa: E402
 from web import app as webapp  # noqa: E402
 
 webapp.app.config.update(TESTING=True)
+
+# 持仓账本写到临时目录，避免测试污染真实 data/private。
+portfolio.PRIVATE_DIR = Path(_TMP) / "private"
+portfolio.POS_FILE = portfolio.PRIVATE_DIR / "positions.json"
+portfolio.POS_DIR = portfolio.PRIVATE_DIR / "users"
 
 PASS = 0
 FAIL = 0
@@ -130,8 +139,14 @@ def main():
     check("普通用户已登录", me.get("authenticated") is True and me.get("admin") is False, str(me))
     check("普通用户自选为空", u.get("/api/symbols").get_json() == [])
     check("普通用户 /admin/invites 403", u.get("/admin/invites").status_code == 403)
-    check("普通用户 /api/positions 403", u.get("/api/positions").status_code == 403)
-    check("普通用户 /api/broker/status 403", u.get("/api/broker/status").status_code == 403)
+    pos = u.get("/api/positions")
+    check(
+        "普通用户 /api/positions 200 且为空",
+        pos.status_code == 200 and pos.get_json().get("positions") == [],
+        str(pos.status_code),
+    )
+    check("普通用户 /api/broker/status 未配置 400", u.get("/api/broker/status").status_code == 400)
+    check("普通用户可打开 /settings", u.get("/settings").status_code == 200)
 
     u.get("/logout")
     reuse = client()
@@ -201,6 +216,84 @@ def main():
 
     admin_row = db.get_user_by_email("admin@example.com")
     aid = admin_row["id"] if admin_row else 0
+
+    print("[6] P1 持仓隔离 / Alpaca BYOK")
+    payload = {
+        "market": "cn",
+        "symbol": "sh600519",
+        "date": "2026-09-01",
+        "price": 100,
+        "qty": 10,
+        "fee": 1,
+    }
+    r = admin.post("/api/positions", json=payload)
+    check("管理员新增持仓 200", r.status_code == 200, str(r.status_code))
+    r = reenabled.post("/api/positions", json=payload)
+    check("普通用户新增持仓 200", r.status_code == 200, str(r.status_code))
+
+    admin_pos = admin.get("/api/positions").get_json().get("positions", [])
+    friend_pos = reenabled.get("/api/positions").get_json().get("positions", [])
+    check("管理员只看到自己的持仓", len(admin_pos) == 1, str(len(admin_pos)))
+    check("普通用户只看到自己的持仓", len(friend_pos) == 1, str(len(friend_pos)))
+    check(
+        "持仓文件按用户隔离",
+        portfolio.positions_path(aid) != portfolio.positions_path(fid)
+        and portfolio.positions_path(aid).exists()
+        and portfolio.positions_path(fid).exists(),
+    )
+
+    r = admin.get("/api/me/broker")
+    check("管理员未配置密钥", r.status_code == 200 and r.get_json().get("configured") is False)
+    r = reenabled.get("/api/me/broker")
+    check("普通用户未配置密钥", r.status_code == 200 and r.get_json().get("configured") is False)
+
+    key_id = "PKTEST-ADMIN-123456"
+    secret = "secret-admin-xyz"
+    r = admin.post("/api/me/broker", json={"key_id": key_id, "secret_key": secret})
+    body = r.get_json()
+    check("保存 Alpaca 密钥 200", r.status_code == 200 and body.get("configured") is True, str(body))
+    check("只返回掩码", key_id not in r.get_data(as_text=True) and secret not in r.get_data(as_text=True))
+    broker_row = db.get_user_broker(aid)
+    check(
+        "密钥加密落库",
+        bool(broker_row)
+        and key_id not in broker_row["api_key_enc"]
+        and secret not in broker_row["secret_enc"],
+    )
+    r = reenabled.get("/api/me/broker")
+    check("普通用户看不到管理员密钥", r.get_json().get("configured") is False)
+    r = admin.post(
+        "/api/me/broker",
+        json={"key_id": key_id, "secret_key": secret, "base_url": "https://api.alpaca.markets"},
+    )
+    check("拒绝非 Paper Base URL 400", r.status_code == 400)
+    check("管理员可打开 /settings", admin.get("/settings").status_code == 200)
+    r = admin.delete("/api/me/broker")
+    check("删除 Alpaca 密钥 200", r.status_code == 200 and db.get_user_broker(aid) is None)
+
+    print("[7] 审计日志")
+    check("管理员可打开 /admin/audit", admin.get("/admin/audit").status_code == 200)
+    check("普通用户 /admin/audit 403", reenabled.get("/admin/audit").status_code == 403)
+    check("普通用户 /api/admin/audit 403", reenabled.get("/api/admin/audit").status_code == 403)
+    r = admin.get("/api/admin/audit?limit=50")
+    check(
+        "管理员审计 API 200",
+        r.status_code == 200 and len(r.get_json().get("events", [])) >= 5,
+        str(r.status_code),
+    )
+    check(
+        "登录成功有审计",
+        any(e.get("actor_email") == "admin@example.com" for e in db.list_audit(action="login.success")),
+    )
+    check("邀请码创建有审计", bool(db.list_audit(action="invite.create")))
+    check("用户注册有审计", bool(db.list_audit(action="user.register")))
+    check("管理员重置密码有审计", bool(db.list_audit(action="admin.user_password_reset")))
+    check("管理员禁用/启用有审计", bool(db.list_audit(action="admin.user_status")))
+    save_events = db.list_audit(action="broker.save")
+    check("BYOK 保存有审计", bool(save_events))
+    check("审计不记录 Secret", bool(save_events) and secret not in (save_events[0].get("detail") or ""))
+    check("BYOK 删除有审计", bool(db.list_audit(action="broker.delete")))
+
     check("管理员不能删除自己 400", admin.delete(f"/api/admin/users/{aid}").status_code == 400)
     check(
         "管理员不能禁用自己 400",
@@ -210,10 +303,16 @@ def main():
     r = admin.delete(f"/api/admin/users/{fid}")
     check("删除用户 200", r.status_code == 200, str(r.status_code))
     check("删除后用户不存在", db.get_user_by_email("friend@example.com") is None)
+    check("删除用户时清理其持仓文件", not portfolio.positions_path(fid).exists())
+    check(
+        "删除用户不影响管理员持仓",
+        len(admin.get("/api/positions").get_json().get("positions", [])) == 1,
+    )
+    check("删除用户有审计", bool(db.list_audit(action="admin.user_delete")))
     deleted = client()
     check("删除后不能登录 401", login(deleted, "friend@example.com", "friend-new-pass-123").status_code == 401)
 
-    print("[6] Cookie 安全配置")
+    print("[8] Cookie 安全配置")
     os.environ["QLIB_COOKIE_SECURE"] = "1"
     probe = Flask("cookie_probe")
     auth.init_app(probe)

@@ -191,10 +191,11 @@ allmkt = pd.concat([df_cn, df_us], axis=0)
   （含 signal/current）。持仓页只读后者，避免把原始序列误当成完整分析结果。
   `compute(..., force=True)` 会绕过两层缓存重新求值，供「刷新因子提醒」使用。
 
-### 持仓账本（P2）
+### 持仓账本（P1 按用户隔离）
 
-- 账本文件：`data/private/positions.json`（`.gitignore` 忽略），临时文件 + `os.replace`
-  原子写，保留 `.bak`；不会进入 GitHub。
+- 账本文件：`data/private/users/{user_id}/positions.json`（`.gitignore` 忽略），
+  临时文件 + `os.replace` 原子写，保留 `.bak`；不会进入 GitHub。
+- 旧全局 `data/private/positions.json` 会在启动时复制给管理员（目标已存在则不覆盖）。
 - 持仓按「标的多 lot」存储；成本含手续费，均价 = 总成本 ÷ 总数量。
 - 价格提醒在 `GET /api/positions` 时即时计算；最新价用真实收盘价，数据陈旧 > 5 天会标注。
 - 风控规则：固定止损与 `2×ATR14` 取较紧者；止盈后移动止盈；峰值盈利 ≥10% 保本；

@@ -60,6 +60,8 @@ Copy-Item data\private\qlib_lab.db          $backup\qlib_lab.db -ErrorAction Sil
 Copy-Item data\private\qlib_lab.db-wal      $backup\qlib_lab.db-wal -ErrorAction SilentlyContinue
 Copy-Item data\private\qlib_lab.db-shm      $backup\qlib_lab.db-shm -ErrorAction SilentlyContinue
 Copy-Item data\private\session_secret       $backup\session_secret -ErrorAction SilentlyContinue
+Copy-Item data\private\master_key           $backup\master_key -ErrorAction SilentlyContinue
+Copy-Item data\private\users                $backup\users -Recurse -ErrorAction SilentlyContinue
 
 Get-ChildItem $backup
 ```
@@ -95,7 +97,7 @@ QLIB_COOKIE_SECURE=1
 - `QLIB_ADMIN_PASSWORD` 只在管理员**还没有密码**时写入数据库。
 - 之后修改 `.env` 里的密码不会覆盖已有密码；重置请用第 8 节的命令。
 - `QLIB_TRUST_CF_HEADER`、`QLIB_ALLOW_DEV_LOGIN`、`QLIB_DEV_EMAIL` 已不再需要。
-- Alpaca 的 `APCA_*` 在 P0 阶段保持注释；模拟交易在 P1 前仍只对 admin 开放。
+- Alpaca 的 `APCA_*` 保持注释；P1 起网页端模拟交易使用每个用户在 `/settings` 填写的 BYOK 密钥，不再读取 `.env` 的共享密钥。
 
 ---
 
@@ -113,7 +115,7 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 
 预期：
 
-- `web\test_auth_local.py`：`46 PASS / 0 FAIL`；
+- `web\test_auth_local.py`：`76 PASS / 0 FAIL`；
 - `web\selftest.py`：原有 108 项全部 PASS。
 
 两个脚本都使用临时 SQLite，不会写 `data/private/qlib_lab.db`。
@@ -278,9 +280,10 @@ Set-Location C:\Work_Data\Source_Code_New\qlib-lab
 - [ ] 自选为空；
 - [ ] 能看到行情、K 线、异常清单、信号回测、股东穿透、因子实验室；
 - [ ] `/admin/invites` 返回 403；
-- [ ] `/api/positions` 返回 403；
-- [ ] `/api/broker/status` 返回 403；
-- [ ] 看不到管理员的自选；
+- [ ] `/api/positions` 返回 200，且只看到自己的账本；
+- [ ] 未配置自己的 Alpaca 密钥时 `/api/broker/status` 返回 400；
+- [ ] `/settings` 能保存/删除自己的 Alpaca Paper 密钥；
+- [ ] 看不到管理员的自选和持仓；
 - [ ] 退出后回到 `/login`。
 
 安全：
@@ -325,7 +328,7 @@ schtasks /Run /TN Qlib_App
 | 本机 `http://127.0.0.1:8853` 登录后仍跳登录页 | `QLIB_COOKIE_SECURE=1` 但用的是 http | 本机调试临时设为 `0`，生产保持 `1` |
 | 邀请码提示无效/过期 | 已使用、过期或输错 | 重新生成 |
 | 普通用户打开 `/admin/invites` 403 | 正常权限隔离 | 不需要处理 |
-| 普通用户看不到持仓/模拟交易 | P1 前仅 admin | 正常 |
+| 普通用户 `/api/broker/status` 返回 400 | 还没在 `/settings` 配置自己的 Alpaca Paper 密钥 | 让用户自行配置，属正常 |
 | 忘记管理员邮箱 | `QLIB_ADMIN_EMAIL` 被改 | 改回原邮箱或直接改数据库 `users.role` |
 
 日志：

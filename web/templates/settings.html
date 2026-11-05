@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>个人设置 · Qlib 数据检视器</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-body">
+<header>
+  <a class="admin-back" href="/">← 返回</a>
+  <div class="brand">个人设置</div>
+  <div class="brand-sub">Alpaca Paper 密钥按用户加密保存 · 仅自己可见</div>
+  <div class="spacer"></div>
+  <div class="user-box">
+    <span class="user-email">{{ current_user.email }}</span>
+    {% if current_user.is_admin %}
+      <a class="user-link" href="/admin/invites">管理</a>
+    {% endif %}
+    <a class="user-link" href="/logout">退出</a>
+  </div>
+</header>
+
+<main class="admin-main">
+  <section class="admin-card settings-card">
+    <div class="admin-card-title">Alpaca Paper（模拟盘）</div>
+    <div id="broker-status" class="settings-status">加载中…</div>
+
+    <div class="settings-form">
+      <label>Key ID
+        <input id="key-id" autocomplete="off" spellcheck="false" placeholder="Alpaca Paper Key ID">
+      </label>
+      <label>Secret Key
+        <input id="secret-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="留空不会覆盖；保存时需重新填写">
+      </label>
+      <label>Base URL
+        <input id="base-url" value="https://paper-api.alpaca.markets" readonly>
+      </label>
+      <div class="settings-actions">
+        <button id="save" class="btn btn-primary">保存密钥</button>
+        <button id="test" class="btn">测试连接</button>
+        <button id="delete" class="btn danger">删除密钥</button>
+      </div>
+      <div id="message" class="settings-message" aria-live="polite"></div>
+    </div>
+
+    <div class="admin-note">
+      <p>密钥使用服务器主密钥加密后写入本机 SQLite，接口只返回掩码，不会把完整 Key/Secret 返回给浏览器。</p>
+      <p>强制锁定 <code>https://paper-api.alpaca.markets</code>，不会连接实盘。下单仍需要在首页手动预览并确认。</p>
+      <p>主密钥默认自动生成到 <code>data/private/master_key</code>；如果设置了 <code>QLIB_MASTER_KEY</code> 则优先使用环境变量。</p>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function setMessage(text, kind) {
+  const el = $("message");
+  el.textContent = text || "";
+  el.className = `settings-message ${kind || ""}`;
+}
+
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = { error: `响应不是 JSON（HTTP ${res.status}）` };
+  }
+  if (res.status === 401) {
+    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+    throw new Error("未登录");
+  }
+  if (!res.ok || (data && data.error)) {
+    throw new Error((data && data.error) || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function renderStatus(d) {
+  const el = $("broker-status");
+  if (!d.configured) {
+    el.innerHTML = '<span class="status-pill warn">未配置</span> 配置后即可在首页使用模拟交易。';
+    return;
+  }
+  el.innerHTML = `<span class="status-pill ok">已配置</span> Key：<span class="mono">${d.key_hint || "—"}</span>`
+    + ` · Paper：<span class="mono">${d.base_url || "https://paper-api.alpaca.markets"}</span>`
+    + (d.updated_at ? ` · 更新：${d.updated_at}` : "");
+}
+
+async function loadStatus() {
+  try {
+    const d = await api("/api/me/broker");
+    renderStatus(d);
+    if (d.configured) $("base-url").value = d.base_url || "https://paper-api.alpaca.markets";
+  } catch (e) {
+    $("broker-status").innerHTML = '<span class="status-pill warn">读取失败</span>';
+    setMessage(e.message, "error");
+  }
+}
+
+$("save").onclick = async () => {
+  const key_id = $("key-id").value.trim();
+  const secret_key = $("secret-key").value;
+  if (!key_id || !secret_key) {
+    setMessage("请填写 Key ID 和 Secret Key（更新时也要重新填写 Secret）", "error");
+    return;
+  }
+  setMessage("保存中…", "");
+  try {
+    const d = await api("/api/me/broker", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key_id, secret_key, base_url: "https://paper-api.alpaca.markets" }),
+    });
+    renderStatus(d);
+    $("secret-key").value = "";
+    setMessage("已保存。可以点「测试连接」确认密钥有效。", "ok");
+  } catch (e) {
+    setMessage(`保存失败：${e.message}`, "error");
+  }
+};
+
+$("test").onclick = async () => {
+  setMessage("测试中…", "");
+  try {
+    const d = await api("/api/me/broker/test", { method: "POST" });
+    const a = d.account || {};
+    setMessage(
+      `连接成功 · 状态 ${a.status || "—"} · 现金 ${a.cash || "—"} · 买入力 ${a.buying_power || "—"} · 权益 ${a.equity || "—"}`,
+      "ok"
+    );
+  } catch (e) {
+    setMessage(`连接失败：${e.message}`, "error");
+  }
+};
+
+$("delete").onclick = async () => {
+  if (!confirm("确定删除已保存的 Alpaca 密钥？删除后模拟交易会立即停用。")) return;
+  setMessage("删除中…", "");
+  try {
+    await api("/api/me/broker", { method: "DELETE" });
+    renderStatus({ configured: false });
+    $("key-id").value = "";
+    $("secret-key").value = "";
+    setMessage("已删除本机保存的 Alpaca 密钥。", "ok");
+  } catch (e) {
+    setMessage(`删除失败：${e.message}`, "error");
+  }
+};
+
+loadStatus();
+</script>
+</body>
+</html>

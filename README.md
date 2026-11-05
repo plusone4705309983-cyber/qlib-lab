@@ -56,7 +56,7 @@ data/
 ├── selfmade/
 │   ├── cn/  us/        # 行情 CSV —— 数据本体，唯一事实来源
 │   └── cn_bin/ us_bin/ # Qlib provider，由 CSV 确定性重建（已 gitignore）
-├── private/            # 个人持仓账本 positions.json（已 gitignore，不进仓库）
+├── private/            # 用户库、加密密钥、每人持仓账本（已 gitignore，不进仓库）
 └── _raw_cache/         # API 原始 JSON 响应，故意提交（见下）
 ```
 
@@ -215,6 +215,7 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 | `QLIB_ADMIN_PASSWORD` | 空 | 管理员初始密码；首次启动写入数据库，之后修改不会覆盖已有密码 |
 | `QLIB_COOKIE_SECURE` | `1` | 生产环境 HTTPS 保持 `1`；本机 `http://127.0.0.1` 调试时设为 `0` |
 | `QLIB_SECRET_KEY` | 自动生成 | 会话签名密钥；留空时写入 `data/private/session_secret` |
+| `QLIB_MASTER_KEY` | 自动生成 | Alpaca 密钥加密主密钥；留空时写入 `data/private/master_key` |
 | `QLIB_LOGIN_MAX_FAILURES` | `10` | 15 分钟内同一邮箱/IP 的最大失败次数 |
 
 **重置密码：**
@@ -239,19 +240,28 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 - 新增/移除接口：`POST /api/watchlist`、`DELETE /api/watchlist/<market>/<symbol>`。
 - 邀请码、用户列表仅 admin 可见；管理员可以查看用户自选、重置用户密码、禁用/启用用户、删除用户。
   不能禁用或删除当前登录的管理员，也不能删除最后一个启用中的管理员。
-- 模拟交易接口在 P1（BYOK）完成前也**只对 admin 开放**，
-  避免朋友误用 `.env` 里的共享 Alpaca 密钥。
-- 持仓账本（`/api/positions*`）在 P1 按用户隔离完成前同样**只对 admin 开放**；
-  非管理员首页会显示「P1 后开放」的提示，避免互相看到或修改同一份账本。
+- 持仓账本（`/api/positions*`）对**所有已登录用户**开放，按 `user_id` 隔离：
+  `data/private/users/{user_id}/positions.json`。A 看不到、也改不了 B 的账本。
+- 模拟交易（`/api/broker/*`）改为 **BYOK**：每个用户在 `/settings` 填写自己的
+  Alpaca Paper Key ID / Secret Key。没配置时接口返回 400 并提示去设置；
+  网页端**不再使用** `.env` 里的共享 `APCA_*` 密钥。
+- 用户 Alpaca 密钥用 Fernet 加密后存在 SQLite 的 `user_broker` 表；
+  接口只返回掩码（如 `PKTEST…3456`），不返回完整密钥。Base URL 强制锁定
+  `https://paper-api.alpaca.markets`。
+- 审计日志仅 admin 可看：`/admin/audit`。记录登录成功/失败、限速、邀请码创建/核销、
+  管理员改状态/重置密码/删除用户、BYOK 保存/删除、下单/撤单、自选变更；
+  **不记录密码和完整 Alpaca 密钥**。
 
 **数据位置：**
 
-- 用户 / 邀请码 / 自选：`data/private/qlib_lab.db`（SQLite，已 gitignore）。
+- 用户 / 邀请码 / 自选 / 加密后的 Alpaca 密钥 / 审计日志：`data/private/qlib_lab.db`（SQLite，已 gitignore）。
 - 会话密钥：`data/private/session_secret`（已 gitignore）。
+- 用户持仓账本：`data/private/users/{user_id}/positions.json`（已 gitignore）。
+- 密钥加密主密钥：`data/private/master_key`（自动生成，已 gitignore）；
+  如设置了 `QLIB_MASTER_KEY` 则优先使用环境变量。
 
-> 注意：持仓账本底层仍是全局 `data/private/positions.json`，P1 会按用户隔离。
-> 在 P1 完成前，账本与模拟交易都只对 admin 开放；朋友仍可正常使用行情、因子、
-> 信号和各自的「我的自选」。
+> 备份时请同时备份 `qlib_lab.db`、`master_key` 和 `users/` 目录。
+> 主密钥丢失后，已保存的 Alpaca 密钥无法解密，用户需要重新填写。
 
 ### 因子实验室（自定义表达式）
 
@@ -282,7 +292,8 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 页面顶部的「持仓账本」把**你记录的买入价/数量**和最新收盘价、ATR、因子信号放在一起，
 直接给出卖出侧提醒（止损 / 止盈 / 移动止盈 / 保本 / 时间止损 / 因子转弱减仓）。
 
-- **数据位置**：`data/private/positions.json`，已加入 `.gitignore`，**不会提交到 GitHub**。
+- **数据位置**：`data/private/users/{user_id}/positions.json`，整个 `data/private/`
+  已加入 `.gitignore`，**不会提交到 GitHub**。每个用户只读写自己的文件。
   写入采用「临时文件 + `os.replace`」原子替换，并保留 `positions.json.bak`。
   页面和 API 都只监听本机回环；公网 HTTPS 由 Cloudflare Tunnel 转发，登录由应用自己负责。
 - **多笔买入**：同一标的是一个持仓，下面挂多笔 lot；成本 = `Σ(价格×数量 + 手续费)`，
@@ -318,6 +329,34 @@ K 线下方依次是：**持仓账本**（买入成本 / 浮盈 / 止损止盈 /
 | POST | `/api/positions/evaluate` | 显式刷新因子提醒（可传 `{"ids":[...]}`） |
 | GET | `/api/quote?market=cn&symbol=sh600519` | 最新收盘价/日期（表单默认值） |
 | GET | `/api/positions/export?fmt=csv` | 导出 CSV（`json` 为完整备份） |
+
+### 模拟交易（Alpaca Paper BYOK）
+
+页面顶部的「模拟交易」使用**当前登录用户自己的** Alpaca Paper 密钥：
+
+1. 点右上角「设置」进入 `/settings`；
+2. 填 Alpaca Paper 的 Key ID / Secret Key，保存；
+3. 点「测试连接」确认能读到 paper 账户；
+4. 回到首页，手动填单 → 预览 → 确认发往 Alpaca Paper。
+
+- 密钥用 Fernet 加密后存 `user_broker` 表，接口只返回掩码。
+- 强制 `https://paper-api.alpaca.markets`，不会连接实盘。
+- 没配置密钥时，`/api/broker/*` 返回 400 并提示去 `/settings`；不会回退到 `.env` 共享密钥。
+- 订单日志按用户过滤，A 看不到 B 的下单记录。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/me/broker` | 当前用户密钥状态（掩码） |
+| POST | `/api/me/broker` | 保存/覆盖 Key ID + Secret |
+| DELETE | `/api/me/broker` | 删除当前用户密钥 |
+| POST | `/api/me/broker/test` | 用当前用户密钥测试 Alpaca Paper 连接 |
+| GET | `/api/broker/status` | 当前用户 paper 账户状态 |
+| GET | `/api/broker/positions` | 当前用户 Alpaca 持仓 |
+| GET | `/api/broker/orders` | 当前用户 Alpaca 委托 |
+| GET | `/api/broker/log` | 当前用户从本页发出的订单日志 |
+| POST | `/api/broker/preview` | 预览订单（只读账户） |
+| POST | `/api/broker/order` | 提交市价单（需手动确认） |
+| POST | `/api/broker/orders/<id>/cancel` | 撤销当前用户的委托 |
 
 #### 表达式书写规则
 
@@ -496,8 +535,12 @@ python scripts\dump_bin.py dump_all --data_path data\selfmade\cn --qlib_dir data
 | `explore/_common.py` | 路径与股票池的单一来源 |
 | `explore/00~05_*.py` | 六个概念脚本 |
 | `web/` | 数据检视网站（Flask + ECharts，含「添加股票」入口） |
-| `web/portfolio.py` | 持仓账本：本地 JSON、成本/浮盈、止损止盈/因子提醒 |
-| `data/private/` | 个人持仓账本（gitignore，不提交） |
+| `web/portfolio.py` | 每人持仓账本：本地 JSON、成本/浮盈、止损止盈/因子提醒 |
+| `web/user_broker.py` | Alpaca BYOK：Fernet 加密、掩码、按用户取密钥 |
+| `web/audit.py` | 审计日志写入：登录、邀请码、管理员操作、BYOK、下单 |
+| `web/templates/settings.html` | 个人设置：Alpaca 密钥保存/测试/删除 |
+| `web/templates/admin_audit.html` | 管理员审计日志查看页 |
+| `data/private/` | 用户库、加密密钥、每人持仓账本（gitignore，不提交） |
 | `notes/concepts.md` | 踩坑记录与概念详解 |
 | `notes/architecture.md` | Qlib 库架构、模块划分与可扩展点 |
 | `data/_raw_cache/` | API 原始响应，可复现性的最后保险 |

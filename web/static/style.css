@@ -934,6 +934,32 @@ body.nav-collapsed .resizer { display: none; }
 .admin-actions .btn.mini { padding: 2px 8px; }
 .admin-empty { padding: 16px; text-align: center; color: var(--muted); }
 .mono { font-family: Consolas, "Courier New", monospace; }
+.settings-card { max-width: 760px; width: 100%; margin: 0 auto; }
+.settings-status {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafbfc;
+  font-size: 13px;
+  line-height: 1.8;
+  margin-bottom: 14px;
+}
+.settings-form { display: flex; flex-direction: column; gap: 12px; }
+.settings-form label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
+.settings-form input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--text);
+}
+.settings-form input[readonly] { background: #f5f6f8; color: var(--muted); }
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.settings-message { min-height: 18px; font-size: 12px; line-height: 1.7; }
+.settings-message.ok { color: #167a45; }
+.settings-message.error { color: var(--error); }
 .status-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; }
 .status-pill.ok { background: #e7f7ee; color: #167a45; }
 .status-pill.muted { background: #eef0f3; color: #6b7280; }

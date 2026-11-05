@@ -1,6 +1,7 @@
 """持仓账本：本地 JSON 持久化 + 成本/浮盈 + 止损止盈/因子转弱提醒。
 
-数据只存在本机 `data/private/positions.json`（已被 .gitignore 忽略，不会进仓库）。
+P1 起按用户隔离：`data/private/users/{user_id}/positions.json`
+（整个 `data/private/` 已被 .gitignore 忽略，不会进仓库）。
 所有写入都先写临时文件再 os.replace，并保留一份 `.bak`，避免断电/并发写坏账本。
 
 设计边界：
@@ -33,6 +34,7 @@ import view  # noqa: E402
 
 PRIVATE_DIR = ROOT / "data" / "private"
 POS_FILE = PRIVATE_DIR / "positions.json"
+POS_DIR = PRIVATE_DIR / "users"
 LOCK = threading.RLock()
 EVAL_LOCK = threading.Lock()
 
@@ -54,8 +56,16 @@ def _empty() -> dict:
     return {"version": 1, "positions": []}
 
 
-def _bak_path() -> Path:
-    return POS_FILE.with_name(POS_FILE.name + ".bak")
+def positions_path(user_id: int | None = None) -> Path:
+    """用户账本路径；None 保留给 selftest/CLI 的旧全局账本。"""
+    if user_id is None:
+        return POS_FILE
+    return POS_DIR / str(int(user_id)) / "positions.json"
+
+
+def _bak_path(user_id: int | None = None) -> Path:
+    path = positions_path(user_id)
+    return path.with_name(path.name + ".bak")
 
 
 def _read_file(path: Path) -> dict:
@@ -67,33 +77,37 @@ def _read_file(path: Path) -> dict:
     return raw
 
 
-def _read_unlocked() -> dict:
-    if not POS_FILE.exists():
+def _read_unlocked(user_id: int | None = None) -> dict:
+    path = positions_path(user_id)
+    if not path.exists():
         return _empty()
     try:
-        return _read_file(POS_FILE)
+        return _read_file(path)
     except Exception as exc:
         # 主文件损坏时尝试 .bak，仍失败就把具体错误抛给前端，绝不悄悄覆盖
-        if _bak_path().exists():
+        bak = _bak_path(user_id)
+        if bak.exists():
             try:
-                return _read_file(_bak_path())
+                return _read_file(bak)
             except Exception:
                 pass
-        raise RuntimeError(f"持仓文件损坏，无法读取: {POS_FILE} ({exc})") from exc
+        raise RuntimeError(f"持仓文件损坏，无法读取: {path} ({exc})") from exc
 
 
-def _write_unlocked(positions: list[dict]) -> None:
-    PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
-    if POS_FILE.exists():
+def _write_unlocked(positions: list[dict], user_id: int | None = None) -> None:
+    path = positions_path(user_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bak = _bak_path(user_id)
+    if path.exists():
         try:
-            shutil.copy2(POS_FILE, _bak_path())
+            shutil.copy2(path, bak)
         except OSError:
             pass
-    tmp = POS_FILE.with_name(POS_FILE.name + ".tmp")
+    tmp = path.with_name(path.name + ".tmp")
     data = {"version": 1, "positions": positions}
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, POS_FILE)
+        os.replace(tmp, path)
     finally:
         try:
             if tmp.exists():
@@ -102,14 +116,38 @@ def _write_unlocked(positions: list[dict]) -> None:
             pass
 
 
-def _load() -> dict:
+def _load(user_id: int | None = None) -> dict:
     with LOCK:
-        return copy.deepcopy(_read_unlocked())
+        return copy.deepcopy(_read_unlocked(user_id))
 
 
-def _save(positions: list[dict]) -> None:
+def _save(positions: list[dict], user_id: int | None = None) -> None:
     with LOCK:
-        _write_unlocked(positions)
+        _write_unlocked(positions, user_id)
+
+
+def migrate_legacy_positions(user_id: int) -> bool:
+    """把旧全局 positions.json 复制到指定用户；目标已存在时不覆盖。"""
+    target = positions_path(user_id)
+    if target.exists() or not POS_FILE.exists():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(POS_FILE, target)
+    return True
+
+
+def delete_user_positions(user_id: int) -> bool:
+    """删除用户账本及备份；仅管理员删除用户时调用。"""
+    path = positions_path(user_id)
+    removed = False
+    for candidate in (path, _bak_path(user_id), path.with_name(path.name + ".tmp")):
+        try:
+            if candidate.exists():
+                candidate.unlink()
+                removed = True
+        except OSError:
+            pass
+    return removed
 
 
 # ---------------------------------------------------------------- 校验
@@ -203,13 +241,13 @@ def _find(positions: list[dict], pos_id: str) -> dict:
 
 
 # ---------------------------------------------------------------- 增删改
-def add_lot(payload: dict) -> list[dict]:
+def add_lot(payload: dict, user_id: int | None = None) -> list[dict]:
     """新增一笔买入。已有同标的持仓时追加到该持仓，不改动原设置。"""
     meta = _meta(payload.get("market"), payload.get("symbol"))
     lot = _lot(payload)
 
     with LOCK:
-        doc = _read_unlocked()
+        doc = _read_unlocked(user_id)
         positions = doc["positions"]
         pos = next(
             (p for p in positions if p.get("market") == meta["market"] and p.get("symbol") == meta["qlib"]),
@@ -233,13 +271,13 @@ def add_lot(payload: dict) -> list[dict]:
             positions.append(pos)
         pos["lots"].append(lot)
         pos["updated_at"] = _now()
-        _write_unlocked(positions)
-    return list_positions()
+        _write_unlocked(positions, user_id)
+    return list_positions(user_id)
 
 
-def update_settings(pos_id: str, payload: dict) -> list[dict]:
+def update_settings(pos_id: str, payload: dict, user_id: int | None = None) -> list[dict]:
     with LOCK:
-        doc = _read_unlocked()
+        doc = _read_unlocked(user_id)
         positions = doc["positions"]
         pos = _find(positions, pos_id)
         if "expr" in payload:
@@ -249,23 +287,23 @@ def update_settings(pos_id: str, payload: dict) -> list[dict]:
             pos["last_signal_error"] = None
         pos.update(_settings(payload, pos))
         pos["updated_at"] = _now()
-        _write_unlocked(positions)
-    return list_positions()
+        _write_unlocked(positions, user_id)
+    return list_positions(user_id)
 
 
-def delete_position(pos_id: str) -> list[dict]:
+def delete_position(pos_id: str, user_id: int | None = None) -> list[dict]:
     with LOCK:
-        doc = _read_unlocked()
+        doc = _read_unlocked(user_id)
         positions = doc["positions"]
         _find(positions, pos_id)
         positions[:] = [p for p in positions if p.get("id") != pos_id]
-        _write_unlocked(positions)
-    return list_positions()
+        _write_unlocked(positions, user_id)
+    return list_positions(user_id)
 
 
-def delete_lot(pos_id: str, lot_id: str) -> list[dict]:
+def delete_lot(pos_id: str, lot_id: str, user_id: int | None = None) -> list[dict]:
     with LOCK:
-        doc = _read_unlocked()
+        doc = _read_unlocked(user_id)
         positions = doc["positions"]
         pos = _find(positions, pos_id)
         before = len(pos["lots"])
@@ -276,8 +314,8 @@ def delete_lot(pos_id: str, lot_id: str) -> list[dict]:
             positions.remove(pos)
         else:
             pos["updated_at"] = _now()
-        _write_unlocked(positions)
-    return list_positions()
+        _write_unlocked(positions, user_id)
+    return list_positions(user_id)
 
 
 # ---------------------------------------------------------------- 因子检查
@@ -312,11 +350,11 @@ def _signal_summary(data: dict, expr: str) -> dict:
     }
 
 
-def evaluate(ids: list[str] | None = None) -> list[dict]:
+def evaluate(ids: list[str] | None = None, user_id: int | None = None) -> list[dict]:
     """显式重新计算持仓的因子信号（force=True，绕过因子实验室缓存）。"""
     # 计算可能要几十秒；这里直接持有文件锁，避免计算期间新增的买入被旧快照覆盖。
     with EVAL_LOCK, LOCK:
-        doc = _read_unlocked()
+        doc = _read_unlocked(user_id)
         positions = doc["positions"]
         targets = [p for p in positions if not ids or p.get("id") in ids]
         cache: dict[tuple, tuple] = {}
@@ -334,8 +372,8 @@ def evaluate(ids: list[str] | None = None) -> list[dict]:
             else:
                 p["last_signal_error"] = value
                 p["last_signal_error_at"] = _now()
-        _write_unlocked(positions)
-    return list_positions()
+        _write_unlocked(positions, user_id)
+    return list_positions(user_id)
 
 
 def cached_factor(meta: dict, expr: str) -> dict | None:
@@ -703,8 +741,8 @@ def _summary(positions: list[dict]) -> dict:
     return {"count": len(positions), "by_currency": by_cur, "danger": danger, "warn": warn}
 
 
-def list_positions() -> dict:
-    doc = _load()
+def list_positions(user_id: int | None = None) -> dict:
+    doc = _load(user_id)
     out = []
     for raw in doc["positions"]:
         try:
@@ -738,19 +776,19 @@ def list_positions() -> dict:
         "positions": out,
         "summary": _summary(out),
         "alerts": flat,
-        "file": str(POS_FILE),
+        "file": str(positions_path(user_id)),
         "asof": max((p.get("last_date") or "" for p in out), default=None),
     }
 
 
 # ---------------------------------------------------------------- 导出
-def export_json() -> str:
-    doc = _load()
+def export_json(user_id: int | None = None) -> str:
+    doc = _load(user_id)
     return json.dumps(doc, ensure_ascii=False, indent=2)
 
 
-def export_csv() -> str:
-    doc = _load()
+def export_csv(user_id: int | None = None) -> str:
+    doc = _load(user_id)
     buf = io.StringIO()
     buf.write("\ufeff")  # Excel 识别 UTF-8
     cols = [

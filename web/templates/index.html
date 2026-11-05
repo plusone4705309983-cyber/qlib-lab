@@ -17,6 +17,7 @@
   <div class="spacer"></div>
   <div class="user-box">
     <span class="user-email" title="{{ current_user.email }}">{{ current_user.email }}</span>
+    <a class="user-link" href="/settings">设置</a>
     {% if current_user.is_admin %}
       <a class="user-link" href="/admin/invites">管理</a>
     {% endif %}
@@ -96,10 +97,9 @@
       <div id="anom-table" class="anom-table"></div>
     </div>
 
-    {% if current_user.is_admin %}
     <div class="pos-wrap" id="pos-wrap">
       <div class="side-title">
-        持仓账本 <span class="muted">买入成本 → 浮盈 / 止损止盈 / 因子转弱 · 数据只存本机</span>
+        我的持仓账本 <span class="muted">买入成本 → 浮盈 / 止损止盈 / 因子转弱 · 只存本机、仅自己可见</span>
       </div>
       <div class="pos-bar">
         <button id="pos-add" class="btn btn-primary">+ 记录买入</button>
@@ -174,25 +174,14 @@
 
       <div id="pos-table" class="bt-table pos-table"></div>
     </div>
-    {% else %}
-    <div class="pos-wrap" id="pos-locked">
-      <div class="side-title">
-        持仓账本 <span class="muted">P1 按用户隔离后开放</span>
-      </div>
-      <div class="pos-hint">
-        持仓账本目前只对管理员开放，避免 P1 完成前不同用户互相看到或修改同一份账本。
-      </div>
-    </div>
-    {% endif %}
 
-    {% if current_user.is_admin %}
     <div class="broker-wrap" id="broker-wrap">
       <div class="side-title">
-        模拟交易（Alpaca Paper） <span class="muted">手动确认 + 一键填单 · 仅连 paper-api.alpaca.markets · 仅管理员</span>
+        模拟交易（Alpaca Paper） <span class="muted">手动确认 + 一键填单 · 仅连 paper-api.alpaca.markets · 使用你自己的密钥</span>
       </div>
       <div class="broker-bar">
         <button id="broker-refresh" class="btn mini">刷新状态</button>
-        <span id="broker-status-text" class="muted">未配置（需 .env）</span>
+        <span id="broker-status-text" class="muted">未配置 · <a href="/settings">去设置 Alpaca 密钥</a></span>
         <span class="spacer"></span>
         <button id="broker-fill" class="btn btn-primary mini">从当前标的/信号一键预填</button>
       </div>
@@ -232,9 +221,8 @@
           <div id="broker-orders" class="broker-table"></div>
         </div>
       </div>
-      <div class="broker-note muted">仅支持美股市价单（day）。所有下单需手动预览并确认，不会自动下单。</div>
+      <div class="broker-note muted">仅支持美股市价单（day）。所有下单需手动预览并确认，不会自动下单。密钥在「设置」里加密保存，接口只返回掩码。</div>
     </div>
-    {% endif %}
 
     <div class="bt-wrap" id="bt-wrap" style="display:none">
       <div class="side-title">信号回测统计 <span class="muted">信号后 N 个交易日真实价收益 · 胜率=方向正确占比</span></div>

@@ -113,7 +113,7 @@ https://qlib.logoslab.cloud/login
 - 不再出现 Cloudflare 邮箱验证码；
 - 输入管理员邮箱 + 密码能进入；
 - `/admin/invites` 能打开；
-- 普通用户访问 `/admin/invites`、`/api/positions`、`/api/broker/status` 返回 403。
+- 普通用户访问 `/admin/invites` 返回 403；`/api/positions` 返回 200（仅自己的账本）；`/api/broker/status` 在未配置自己的 Alpaca 密钥时返回 400。
 
 ---
 

@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from .alpaca import AlpacaBroker
 
-_broker = AlpacaBroker()
 
-
-def get_broker():
-    return _broker
+def get_broker(config_obj=None):
+    """返回券商适配器；传入用户配置时使用该用户的密钥。"""
+    return AlpacaBroker(config_obj)

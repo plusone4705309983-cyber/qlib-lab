@@ -1976,7 +1976,8 @@ async function brokerStatus() {
   } catch (e) {
     brokerState.configured = false;
     brokerState.account = null;
-    $("broker-status-text").textContent = e.message.includes("密钥") ? e.message : `未配置或错误：${e.message}`;
+    const msg = e.message.includes("密钥") ? e.message : `未配置或错误：${e.message}`;
+    $("broker-status-text").innerHTML = `${esc(msg)} · <a href="/settings">去设置 Alpaca 密钥</a>`;
     $("broker-account").innerHTML = "";
   }
 }

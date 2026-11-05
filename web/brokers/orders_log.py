@@ -18,7 +18,7 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def log_order(event: dict) -> dict:
+def log_order(event: dict, user_id: int | None = None) -> dict:
     PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         data = json.loads(LOG_FILE.read_text(encoding="utf-8")) if LOG_FILE.exists() else {"orders": []}
@@ -28,7 +28,7 @@ def log_order(event: dict) -> dict:
             data["orders"] = []
     except Exception:
         data = {"orders": []}
-    entry = {"ts": _now(), **event}
+    entry = {"ts": _now(), "user_id": user_id, **event}
     data["orders"].insert(0, entry)
     data["orders"] = data["orders"][:200]
     tmp = LOG_FILE.with_name(LOG_FILE.name + ".tmp")
@@ -46,12 +46,16 @@ def log_order(event: dict) -> dict:
     return entry
 
 
-def get_log(limit: int = 50) -> list[dict]:
+def get_log(limit: int = 50, user_id: int | None = None) -> list[dict]:
     try:
         if not LOG_FILE.exists():
             return []
         data = json.loads(LOG_FILE.read_text(encoding="utf-8"))
         orders = data.get("orders") if isinstance(data, dict) else []
-        return orders[:limit] if isinstance(orders, list) else []
+        if not isinstance(orders, list):
+            return []
+        if user_id is not None:
+            orders = [x for x in orders if x.get("user_id") == user_id]
+        return orders[:limit]
     except Exception:
         return []
